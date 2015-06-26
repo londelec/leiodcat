@@ -1,14 +1,1 @@
-/Debug
-*.o
-*.d
-*.elf
-*.lss
-*.map
-*.eep
-*.hex
-*.bin
-.cproject
-.project
-/.settings
-builddate.txt
-createbuilddate.sh
+/Release

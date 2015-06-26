@@ -2,11 +2,14 @@
  ============================================================================
  Name        : ledefs.h
  Author      : AK
- Version     : V1.07
+ Version     : V1.08
  Copyright   : Property of Londelec UK Ltd
  Description : Global header file for Londelec C/C++ projects
 
   Change log  :
+
+  *********V1.08 22/06/2015**************
+  Londelec Unix second definition added
 
   *********V1.07 16/02/2015**************
   EXIT_SUCCESS and EXIT_FAILURE need to be defined for Atmel
@@ -65,6 +68,7 @@
 #define	HOURINSEC						3600			// Hour in seconds
 //#define	DAYINSEC						86400			// Day in seconds
 #define SECINNSEC						1000000000		// Second in nanoseconds
+#define MSECINNSEC						1000000			// Milisecond in nanoseconds
 
 
 // Force compiler to use min number of bytes for
@@ -116,6 +120,9 @@ typedef	__pid_t						lepid;				/* Process identifier size definition */
 typedef	pthread_t					lethread;			/* Thread identifier size definition */
 typedef fd_set						lefdset;			/* Directly accessible bit set */
 typedef __time_t					leunixsec;			/* Unix second definition */
+typedef uint32_t					leepochsec;			/* Londelec defined 32bit unsigned seconds since epoch */
+typedef uint64_t					leepoch64sec;		/* Londelec defined 64bit seconds since epoch */
+typedef uint16_t					lemsecdef;			/* Milisecond size definition */
 #endif	// MCUTYPE
 
 
@@ -135,6 +142,7 @@ typedef	uint16_t					leflags16bit;		/* Internal flag size definition */
 #define STRINGIFY_(s) 				#s
 #define STRINGIFY(s)				STRINGIFY_(s)
 #define ARRAY_SIZE(x)				(sizeof(x) / sizeof((x)[0]))
+#define BOOL_CHECK(b)				(b ? 1 : 0)
 
 
 /*// Macros for expanding the date string

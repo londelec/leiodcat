@@ -2,11 +2,16 @@
 ============================================================================
  Name        : board.h
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for board hardware module
 
   Change log  :
+
+  *********V1.01 12/06/2015**************
+  ADCB is used for temperature measurements and calculation function created
+  EEPROM configuration read/write mask and update request bit sets added to board structure
+  DI modes added
 
   *********V1.00 30/09/2014**************
   Initial revision
@@ -19,6 +24,7 @@
 
 
 #include "ledefs.h"
+#include "atmeldefs.h"
 
 
 
@@ -36,15 +42,17 @@
 #define BOARD_AUTOID_MASK			0x3F	// Mask pins which are not used for ID resistors
 
 
-// ADC and channel
+// ADC and channels
 #define BOARD_ADC					ADCA			// Board ADC for temperature measurement, also used by powman
-#define BOARD_TEMPCH				BOARD_ADC.CH0	// ADC Channel for temperature measurement
-#define BOARD_VDDIOCH				BOARD_ADC.CH1	// ADC Channel for VDDIO measurement used by powman
+#define BOARD_VDDIOCH				BOARD_ADC.CH0	// ADC Channel for VDDIO measurement used by powman
+#define TEMP_ADC					ADCB			// ADC for temperature measurement
+#define TEMP_CHAN					TEMP_ADC.CH0	// ADC Channel for temperature measurement
 
 
 // Board runtime flags
 #define BOARDRF_EVENT				0x01
 #define BOARDRF_UPDATE_LED			0x02
+#define BOARDRF_EECONF_CORRUPTED	0x10
 
 
 ///#define bit_clear(p,m)  ((p) &= ~(1 << (m)))
@@ -53,17 +61,25 @@
 //#define bit_toggle(p,m) (p ^= (1 << m))
 
 
-// Output operation policies
-// Last value is 0xFFFF because policies are
-// mapped to Modbus registers and need to be 2 bytes
+// Input operation modes
+// Last value is 0xFFFF because modes are
+// mapped directly to Modbus registers and need to have 2 bytes
 typedef enum {
-	dopolen_holdperiod				= 1,
-	dopolen_undefined				= 0xFFFF
-} LEOPACK dopolicyenum;
+	dimden_spi						= 1,
+	dimden_undefined				= 0xFFFF
+} LEOPACK dimodeenum;
+
+
+// Output operation modes
+typedef enum {
+	domden_pulseout					= 1,
+	domden_undefined				= 0xFFFF
+} LEOPACK domodeenum;
 
 
 typedef struct boardDIstr_ {
 	uint16_t				*samples;					// Sampling counter of each input
+	dimodeenum				*mode;						// Operation mode of each input
 	uint16_t				*filterconst;				// Filter constant in miliseconds of each input
 	uint8_t					*bitoffset;					// Bit offset of each input
 	uint16_t				distates;					// Realtime DI states, mapped to MODBUS
@@ -73,8 +89,8 @@ typedef struct boardDIstr_ {
 
 typedef struct boardDOstr_ {
 	uint16_t				*samples;					// Sampling counter of each output
-	uint16_t				*holdperiod;				// Output activated hold period in miliseconds
-	dopolicyenum			*policy;					// Operation policy of each output
+	domodeenum				*mode;						// Operation mode of each output
+	uint16_t				*pulsedur;					// Output pulse duration in miliseconds
 	uint8_t					*bitoffset;					// Bit offset of each output
 	uint16_t				dostates;					// Realtime DO states, mapped to MODBUS
 	uint16_t				updatereg;					// Mapped register for output update requests
@@ -82,18 +98,22 @@ typedef struct boardDOstr_ {
 } boardDOstr;
 
 
-typedef struct BOARD_t {
+typedef struct boardstr_ {
 	uint8_t					rflags;						// Runtime flags
-	boardDIstr				*diptr;
-	boardDOstr				*doptr;
+	boardDIstr				*diptr;						// DI structure pointer, initialized of board has DIs
+	boardDOstr				*doptr;						// DO structure pointer, initialized of board has DOs
 	uint8_t					ledoepin;					// Output enable (OE) pin of 74LV541
 	PORT_t					*ctrlport;					// MCU control port
 	uint16_t				mapsize;					// Actual count of modbus mapped registers
-} BOARD_t;
+	mcubitsetDef			eeupdatebs;					// EEPROM configuration update bit set
+	mcubitsetDef			eerdmask;					// EEPROM read masks (bit set)
+	mcubitsetDef			eewrmask;					// EEPROM write masks (bit set)
+} boardstr;
 
 
-extern BOARD_t	boardio;
+extern boardstr	boardio;
 extern uint16_t	caltemp85;
+extern uint16_t	tempscaled;
 
 
 void board_init();
@@ -103,6 +123,7 @@ void board_mainproc();
 uint8_t checkotherdoactive(boardDOstr *doptr, uint8_t doindex);
 void activateDO(boardDOstr *doptr, uint8_t doindex);
 void releaseDO(boardDOstr *doptr, uint8_t doindex);
+void calctemperature();
 
 void boardisr_1ms();
 

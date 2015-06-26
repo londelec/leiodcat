@@ -23,7 +23,7 @@
 
 
 #ifdef GLOBAL_DEBUG
-#define DEBUG_NOUARTTX
+//#define DEBUG_NOUARTTX
 #endif	// GLOBAL_DEBUG
 
 

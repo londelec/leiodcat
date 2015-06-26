@@ -2,11 +2,14 @@
  ============================================================================
  Name        : Modbus.c
  Author      : AK
- Version     : V1.02
+ Version     : V1.03
  Copyright   : Property of Londelec UK Ltd
  Description : Modbus RTU communication protocol link layer module
 
   Change log  :
+
+  *********V1.03 16/06/2015**************
+  Character multiplier is no longer passed to application layer
 
   *********V1.02 12/02/2015**************
   Changes related to marking flag addition to exported qualifier
@@ -33,7 +36,7 @@
 
 
 
-const lechar *ModbusVersion = " ModbusVersion=1.02 ";
+//const lechar *ModbusVersion = " ModbusVersion=1.02 ";
 
 
 #ifdef GLOBAL_DEBUG
@@ -670,7 +673,7 @@ CHStateEnum Modbussl_analyze(StatStr *staptr) {
 	//servincrementCNT(staptr, servCTrx, 0);	// Increment Rx counter
 	sharedlink->rxbytecnt = 0;				// Reset receive pointer after logfile function call
 	realprot->linklayer->commsstate = Modbuslinkok;			// Reset comms state if message received
-	linklayer->txapplen = Modbussl_appprocess(realprot->applayer, rxappbuffer, sharedlink->charmult);
+	linklayer->txapplen = Modbussl_appprocess(realprot->applayer, rxappbuffer);
 
 
 	if (!linklayer->txapplen) goto Modbussl_notreceived;

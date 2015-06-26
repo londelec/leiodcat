@@ -2,11 +2,14 @@
 ============================================================================
  Name        : Modbusdef.h
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for Modbus communication protocol definitions
 
   Change log  :
+
+  *********V1.02 13/06/2015**************
+  Application buffer byte offsets added
 
   *********V1.01 24/02/2015**************
   16bit register and data definitions created
@@ -47,6 +50,31 @@
 
 #define	MBB_EXCEPTION					0x80			// Modbus exception bit
 
+
+// Byte offsets in application buffer
+// Byte {1}
+#define MODBOFS_FUNC 			(1)
+// Byte {2}
+#define MODBOFS_DATA			(2)
+#define MODBOFS_04BLEN			(2)
+#define MODBOFS_XREGH			(2)
+// Byte {3}
+#define MODBOFS_XREGL			(3)
+// Byte {4}
+#define MODBOFS_04CNTH			(4)
+#define MODBOFS_06DATH			(4)
+#define MODBOFS_10CNTH			(4)
+// Byte {5}
+#define MODBOFS_04CNTL			(5)
+#define MODBOFS_06DATL			(5)
+#define MODBOFS_10CNTL			(5)
+// Dynamic data offsets
+#define MODBOFS_APPBYTES(moffset)	(2 + (moffset))
+#define MODBOFS_11DATH(moffset)		(3 + (moffset))
+#define MODBOFS_04DATH(moffset)		(3 + (moffset))
+#define MODBOFS_04DATL(moffset)		(4 + (moffset))
+#define MODBOFS_10DATH(moffset)		(7 + (moffset))
+#define MODBOFS_10DATL(moffset)		(8 + (moffset))
 
 
 

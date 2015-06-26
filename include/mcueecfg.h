@@ -2,11 +2,17 @@
 ============================================================================
  Name        : mcueecfg.h
  Author      : AK
- Version     : V1.00
+ Version     : V2.00
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for MCU EEPROM configuration structures
 
   Change log  :
+
+  *********V2.00 12/06/2015**************
+  New functions enabling EEPROM writes, CRC calculation. etc
+  EEPROM specific type definitions added
+  Changes in EEPROM group and data enums
+  DI modes added
 
   *********V1.00 28/12/2014**************
   Initial revision
@@ -19,6 +25,9 @@
 
 
 #include <stdint.h>
+
+
+#include "modbussl.h"
 
 
 #define	MCUEE_EESIZE			EEPROM_SIZE			// Inbuilt EEPROM
@@ -57,13 +66,20 @@
 		meedname = {MCUEECFG_CONCAT4(eedten_, mgname, _, mdname), sizeof(eepromcfg.meedname.value), mvalue},
 
 
+// EEPROM specific type definitions
+typedef	uint16_t						eecfgsizeDef;		/* EEPROM configuration size definition */
+typedef	uint16_t						eegrpsizeDef;		/* EEPROM group size definition */
 
+
+// Warning, group IDs must not exceed 0x0F because
+// they are used in bit set calculation, (1 << eegren_*)
 typedef enum {
 	eegren_empty					= 0,				// Empty
 	eegren_uart0					= 1,				// UART0
 	eegren_uart1					= 2,				// UART1
-	eegren_board					= 3,				// Board settings
-	eegren_powman					= 4,				// Power manager
+	eegren_powman					= 3,				// Power manager
+	eegren_board					= 0x08,				// Board settings, we want to keep it higher because hopefully it will be written to EEPROM last
+	eegren_last						= 0x0F,				// Last group enum
 	eegren_undefined				= 0xFF				// Undefined
 } LEOPACK mcueegrpenum;
 
@@ -101,7 +117,23 @@ typedef enum {
 // configuration data initialization macro
 typedef enum {
 	eedten_board_empty				= 0,				// Empty
-	eedten_board_diflt00			= 0x10,				// DI filter values
+	eedten_board_dimode00			= 0x10,				// DI modes
+	eedten_board_dimode01,
+	eedten_board_dimode02,
+	eedten_board_dimode03,
+	eedten_board_dimode04,
+	eedten_board_dimode05,
+	eedten_board_dimode06,
+	eedten_board_dimode07,
+	eedten_board_dimode08,
+	eedten_board_dimode09,
+	eedten_board_dimode0A,
+	eedten_board_dimode0B,
+	eedten_board_dimode0C,
+	eedten_board_dimode0D,
+	eedten_board_dimode0E,
+	eedten_board_dimode0F,
+	eedten_board_diflt00			= 0x20,				// DI filter values
 	eedten_board_diflt01,
 	eedten_board_diflt02,
 	eedten_board_diflt03,
@@ -117,38 +149,38 @@ typedef enum {
 	eedten_board_diflt0D,
 	eedten_board_diflt0E,
 	eedten_board_diflt0F,
-	eedten_board_dohld00			= 0x20,				// DO hold period values
-	eedten_board_dohld01,
-	eedten_board_dohld02,
-	eedten_board_dohld03,
-	eedten_board_dohld04,
-	eedten_board_dohld05,
-	eedten_board_dohld06,
-	eedten_board_dohld07,
-	eedten_board_dohld08,
-	eedten_board_dohld09,
-	eedten_board_dohld0A,
-	eedten_board_dohld0B,
-	eedten_board_dohld0C,
-	eedten_board_dohld0D,
-	eedten_board_dohld0E,
-	eedten_board_dohld0F,
-	eedten_board_dopol00			= 0x30,				// DO policy values
-	eedten_board_dopol01,
-	eedten_board_dopol02,
-	eedten_board_dopol03,
-	eedten_board_dopol04,
-	eedten_board_dopol05,
-	eedten_board_dopol06,
-	eedten_board_dopol07,
-	eedten_board_dopol08,
-	eedten_board_dopol09,
-	eedten_board_dopol0A,
-	eedten_board_dopol0B,
-	eedten_board_dopol0C,
-	eedten_board_dopol0D,
-	eedten_board_dopol0E,
-	eedten_board_dopol0F,
+	eedten_board_domode00			= 0x30,				// DO modes
+	eedten_board_domode01,
+	eedten_board_domode02,
+	eedten_board_domode03,
+	eedten_board_domode04,
+	eedten_board_domode05,
+	eedten_board_domode06,
+	eedten_board_domode07,
+	eedten_board_domode08,
+	eedten_board_domode09,
+	eedten_board_domode0A,
+	eedten_board_domode0B,
+	eedten_board_domode0C,
+	eedten_board_domode0D,
+	eedten_board_domode0E,
+	eedten_board_domode0F,
+	eedten_board_dopul00			= 0x40,				// DO hold period values
+	eedten_board_dopul01,
+	eedten_board_dopul02,
+	eedten_board_dopul03,
+	eedten_board_dopul04,
+	eedten_board_dopul05,
+	eedten_board_dopul06,
+	eedten_board_dopul07,
+	eedten_board_dopul08,
+	eedten_board_dopul09,
+	eedten_board_dopul0A,
+	eedten_board_dopul0B,
+	eedten_board_dopul0C,
+	eedten_board_dopul0D,
+	eedten_board_dopul0E,
+	eedten_board_dopul0F,
 	eedten_board_undefined			= 0xFF				// Undefined
 } LEOPACK mcueedboardenum;
 
@@ -158,13 +190,13 @@ typedef struct mcueeheader_ {
 	uint8_t					revmajor;					// Revision major number
 	uint8_t					delimiter;					// Delimiter e.g.g dot '.'
 	uint8_t					revminor;					// Revision minor number
-	uint16_t				size;						// Size of all configuration including EE header
+	eecfgsizeDef			size;						// Size of all configuration including EE header, but excluding CRC
 } mcueeheader;
 
 
 typedef struct mcueegrphead_ {
 	mcueegrpenum			id;							// Group ID (UART, Powman, etc)
-	uint16_t				size;						// Group size excluding group header
+	eegrpsizeDef			size;						// Group size excluding group header
 } mcueegrphead;
 
 
@@ -181,24 +213,36 @@ EEDTSTR_DEFINE(eeuartt35,		uint32_t)				// UART t35 Timeout in 100x microseconds
 EEDTSTR_DEFINE(eeuartaddress,	uint8_t)				// Device address
 
 
-/*typedef struct mcueeuart_ {
-	mcueegrphead				head;					// Structure generic header
-	EEDATAVAR_DEFINE(parity,	uint8_t)				// UART parity, data bits, stop bit
-	EEDATAVAR_DEFINE(txdelay,	uint32_t)				// UART Tx delay in 100x microseconds
-	EEDATAVAR_DEFINE(timeout,	uint32_t)				// UART Timeout in 100x microseconds
-	EEDATAVAR_DEFINE(t35,		uint32_t)				// UART t35 Timeout in 100x microseconds
-	EEDATAVAR_DEFINE(address,	uint8_t)				// Device address
-} mcueeuart;*/
-
 EEDTSTR_DEFINE(eepowmanthadc3v2, uint16_t)				// ADC threshold for 3.2V detection
 
 
+EEDTSTR_DEFINE(eeboarddimode,	uint16_t)				// DI mode
 EEDTSTR_DEFINE(eeboarddiflt,	uint16_t)				// DI filter
-EEDTSTR_DEFINE(eeboarddohld,	uint16_t)				// DO hold period
-EEDTSTR_DEFINE(eeboarddopol,	uint16_t)				// DO policy
+EEDTSTR_DEFINE(eeboarddomode,	uint16_t)				// DO mode
+EEDTSTR_DEFINE(eeboarddopul,	uint16_t)				// DO pulse duration
 
 
+// EEPROM to register memory map table structure
+/*typedef struct eemapregTblStr_ {
+	atmappingenum			mapreg;
+	uint8_t					dataid;
+} eemapregTblStr;*/
 
-uint8_t getee_data(mcueegrpenum groupid, uint8_t dataid, uint32_t *retdword);
+
+uint8_t eeconf_get(mcueegrpenum groupid, uint8_t dataid, uint32_t *rddword);
+void eeconf_update(ModbusRegStr *regmem);
+void eeconf_restructure();
+
+leptr eesearch_group(mcueegrpenum groupid, eegrpsizeDef *groupsize, leptr *nextavail);
+leptr eesearch_data(uint8_t dataid, leptr groupptr, eegrpsizeDef groupsize, uint32_t *rddword);
+void eeread_data(leptr eeadr, uint32_t *rddword, uint8_t size);
+void eewrite_data(leptr eeadr, uint32_t wrdword, uint8_t size);
+eegrpsizeDef eegrpcreate_powman(uint8_t **memptr);
+eegrpsizeDef eegrpcreate_board(uint8_t **memptr);
+void eepopoulate_datamem(uint8_t **memptr, uint8_t *wrdata, uint8_t size, uint8_t basedten, uint8_t count);
+void eepopoulate_grouphead(uint8_t **memptr, mcueegrpenum groupid, uint16_t size);
+uint8_t eeconf_crc(uint8_t updatecrc);
+mcueegrpenum eegroupid_resolve(atmappingenum mapreg);
+
 
 #endif /* MCUEECFG_H_ */

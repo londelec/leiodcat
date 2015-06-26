@@ -2,11 +2,15 @@
  ============================================================================
  Name        : atmeldefs.h
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : Definitions header file for Atmel MCU projects
 
   Change log  :
+
+  *********V1.01 16/06/2015**************
+  MCU bit set type definition created
+  ADC unsigned offset constant created
 
   *********V1.00 18/02/2015**************
   Initial revision
@@ -25,6 +29,11 @@
 
 typedef	uint8_t						rxbytesdef;			/* recv/read/send function return size definition */
 typedef	uint32_t					TimerConstDef;		/* 32bit Timer Constant size definition */
+typedef	uint16_t					mcubitsetDef;		/* Bit set size definition */
+
+
+// IO definitions
+#define ATMELMCU_ADC_USIGNOFS	190			// ADC offset when using unsigned mode
 
 
 // Atmel board/hardware types

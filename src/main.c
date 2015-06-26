@@ -2,11 +2,17 @@
  ============================================================================
  Name        : main.c
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : LEIODC MCU main module
 
   Change log  :
+
+  *********V1.01 12/06/2015**************
+  Firmware string constants and tables moved to flash memory
+  UART settings are hardcoded by default, not read from EEPROM
+  EEPROM configuration is check and restructured if necessary on startup
+  Modbus mapping changes
 
   *********V1.00 24/02/2015**************
   Initial revision
@@ -37,13 +43,13 @@
 
 
 #define	FWVERSION_MAJOR			1			// Firmware version number major
-#define	FWVERSION_MINOR			1			// Firmware version number minor
+#define	FWVERSION_MINOR			2			// Firmware version number minor
 #if FWVERSION_MINOR < 10
 #define	FWVERSION_10TH_ZERO		"0"
 #else
 #define	FWVERSION_10TH_ZERO		""
 #endif
-const lechar *FirmwareVersion = " FirmwareVersion="\
+const lechar FirmwareVersion[] PROGMEM = " FirmwareVersion="\
 								STRINGIFY(FWVERSION_MAJOR)\
 								"."\
 								FWVERSION_10TH_ZERO\
@@ -52,9 +58,12 @@ const lechar *FirmwareVersion = " FirmwareVersion="\
 #include "builddate.txt"
 
 
+#define	HARDCODED_UART_SETTINGS				// Don't load UART setting from EEPROM
+
+
 // Board hardware type
 athwenum				BoardHardware = athwenundefined;
-uint16_t				FwRevNumber = (FWVERSION_MAJOR * 100) + FWVERSION_MINOR;
+const uint16_t			FwRevNumber = (FWVERSION_MAJOR * 100) + FWVERSION_MINOR;
 
 
 // Base pointers
@@ -63,10 +72,13 @@ StatStr					*Station0ptr = NULL;
 GenProtocolStr			*Gprotocol0ptr = NULL;
 
 
-const hardwarenamestr hwnametable[] = {
-	{"Unknown",			athwenundefined},
-	{"LEIODC-MX-3100",	athwenmx3100v11},
+const lechar athwenundefinedc[] PROGMEM = "Unknown";
+const lechar athwenmx3100v11c[] PROGMEM = "LEIODC-MX-3100";
+const hardwarenamestr hwnametable[] PROGMEM = {
+	{athwenundefined, 		(leptr) athwenundefinedc},
+	{athwenmx3100v11,	 	(leptr) athwenmx3100v11c},
 };
+
 
 
 #ifdef GLOBAL_DEBUG
@@ -85,6 +97,7 @@ int main(void) {
 	timer_init();
 	powman_init();
 	comms_init();
+	if (boardio.eeupdatebs) eeconf_restructure();
 #ifdef GLOBAL_DEBUG
 	//uint8_t debugint = 0;
 #endif
@@ -127,46 +140,48 @@ void comms_init() {
 	uint32_t			eedword;
 	uint32_t 			baudrate = 115200;
 	uint8_t 			parity = 'E';
-	uint8_t				devaddr = 0;			// Undefined device address
+	uint8_t				devaddr = 1;
 	TimerConstDef 		t35 = 0;				// Undefined, default value will be used
 
 
-	if (getee_data(eegren_uart0, eedten_uart_address, &eedword) == EXIT_SUCCESS) {
+	chanptr = channelinit();		// Initialize new channel
+	staptr = stationinit();			// Initialize new station
+	genprotocol = genprotinit();	// Initialize new generic protocol
+	staptr->channelinst = chanptr;	// Link station to channel
+	genprotocol->statptr = staptr;	// Link general protocol to station
+	chanptr->serialsta = staptr;	// Select serial station
+	chanptr->chtimeout = DEFAULT_TIMEOUT;	// Default value 5sec
+
+
+#ifdef HARDCODED_UART_SETTINGS
+	boardio.eerdmask |= (1 << eegren_uart0);
+#endif
+
+
+	if (eeconf_get(eegren_uart0, eedten_uart_address, &eedword) == EXIT_SUCCESS)
 		devaddr = eedword;
-		chanptr = channelinit();		// Initialize new channel
-		staptr = stationinit();			// Initialize new station
-		genprotocol = genprotinit();	// Initialize new generic protocol
-		staptr->channelinst = chanptr;	// Link station to channel
-		genprotocol->statptr = staptr;	// Link general protocol to station
-		chanptr->serialsta = staptr;	// Select serial station
-		chanptr->chtimeout = DEFAULT_TIMEOUT;	// Default value 5sec
+	if (eeconf_get(eegren_uart0, eedten_uart_baudrate, &eedword) == EXIT_SUCCESS)	// Read baudrate
+		baudrate = eedword;
+	if (eeconf_get(eegren_uart0, eedten_uart_parity, &eedword) == EXIT_SUCCESS)		// Read parity
+		parity = eedword;
+	if (eeconf_get(eegren_uart0, eedten_uart_txdelay, &eedword) == EXIT_SUCCESS)	// Read tx delay
+		chanptr->chtxdelay = eedword;
+	if (eeconf_get(eegren_uart0, eedten_uart_timeout, &eedword) == EXIT_SUCCESS)	// Read timeout
+		chanptr->chtimeout = eedword;
+	if (eeconf_get(eegren_uart0, eedten_uart_t35, &eedword) == EXIT_SUCCESS)		// Read t35 timeout
+		t35 = eedword;
+
+	//if (baudrate > 19200) {
+	//	chanptr-> tperiod = 35 * USART_FRAME35_TIMER_50US_TICKS;	/* ~1750us. */
+	//}
+	//else {
+	//	tperiod = (( 7UL * 220000 ) / ( 2UL * baudrate )) * USART_FRAME35_TIMER_50US_TICKS;
+	//}
 
 
-		if (getee_data(eegren_uart0, eedten_uart_baudrate, &eedword) == EXIT_SUCCESS)	// Read baudrate
-			baudrate = eedword;
-		if (getee_data(eegren_uart0, eedten_uart_parity, &eedword) == EXIT_SUCCESS)		// Read parity
-			parity = eedword;
-		if (getee_data(eegren_uart0, eedten_uart_txdelay, &eedword) == EXIT_SUCCESS)	// Read tx delay
-			chanptr->chtxdelay = eedword;
-		if (getee_data(eegren_uart0, eedten_uart_timeout, &eedword) == EXIT_SUCCESS)	// Read timeout
-			chanptr->chtimeout = eedword;
-		if (getee_data(eegren_uart0, eedten_uart_t35, &eedword) == EXIT_SUCCESS)		// Read t35 timeout
-			t35 = eedword;
-
-		//if (baudrate > 19200) {
-		//	chanptr-> tperiod = 35 * USART_FRAME35_TIMER_50US_TICKS;	/* ~1750us. */
-		//}
-		//else {
-		//	tperiod = (( 7UL * 220000 ) / ( 2UL * baudrate )) * USART_FRAME35_TIMER_50US_TICKS;
-		//}
-
-		// TODO can migrate all mapping to EEPROM configuration
-
-
-		usart_init(&chanptr->usart, baudrate, parity);						// Initialize UART
-		Modbussl_preinit(genprotocol, devaddr);
-		Modbussl_postinit(genprotocol, t35, boardio.mapsize);
-	}
+	usart_init(&chanptr->usart, baudrate, parity);						// Initialize UART
+	Modbussl_preinit(genprotocol, devaddr);
+	Modbussl_postinit(genprotocol, t35, boardio.mapsize);
 }
 
 
@@ -200,7 +215,7 @@ void protocolrxproc() {
 void protocolmainproc() {
 	StatStr				*staptr;
 	uint8_t				*txbuffer;			// Buffer pointer will be initialized by outgoing message prepare functions
-	SocketBufDef		txlength = 0;
+	TxRx16bitDef		txlength = 0;
 	CHStateEnum			chstate = CHCommsEmpty;			// Return state of functions
 	CHStateEnum			(*procfunc)(DRVARGDEF_MAINPROC);
 
@@ -296,18 +311,25 @@ GenProtocolStr *genprotinit() {
 /***************************************************************************
 * Get name of the current hardware
 * [24/02/2015]
+* Table moved to program space
+* [15/06/2015]
 ***************************************************************************/
-uint8_t gethwname(lechar **stringptr) {
-	uint8_t				cnt;
+uint8_t gethwname(lechar *hwnamebuff, uint8_t bufflen) {
+	uint8_t					cnt, tabcnt;
+	athwenum				hwtype;
+	leptr					lpmptr;
 
 
-	for (cnt = 0; cnt < (sizeof(hwnametable) / sizeof(hardwarenamestr)); cnt++) {
-		if (hwnametable[cnt].type == BoardHardware) {
-			*stringptr = hwnametable[cnt].string;
-			return strlen(hwnametable[cnt].string);
+	for (tabcnt = 0; tabcnt < (ARRAY_SIZE(hwnametable)); tabcnt++) {
+		hwtype = pgm_read_byte(&hwnametable[tabcnt].type);			// Read hardware type from program space
+		if (hwtype == BoardHardware) {
+			lpmptr = pgm_read_word(&hwnametable[tabcnt].strptr);	// Read string pointer from program space
+			for (cnt = 0; cnt < bufflen; cnt++) {
+				hwnamebuff[cnt] = pgm_read_byte(lpmptr + cnt);		// Read bytes of the hardware string
+				if (!hwnamebuff[cnt]) return cnt;
+			}
 		}
 	}
-	*stringptr = NULL;
 	return 0;		// String not found in the table
 }
 
@@ -332,6 +354,31 @@ uint8_t mappinginit(ModReg16bitDef reg, leptr *rdptr, leptr *wrptr) {
 			//*rdptr = (leptr) &leddriver.ackflags;
 			//*rdptr = (leptr) &PORTE.IN;
 			return EXIT_SUCCESS;
+		}
+		break;
+
+	case atmapen_dimode00:
+	case atmapen_dimode01:
+	case atmapen_dimode02:
+	case atmapen_dimode03:
+	case atmapen_dimode04:
+	case atmapen_dimode05:
+	case atmapen_dimode06:
+	case atmapen_dimode07:
+	case atmapen_dimode08:
+	case atmapen_dimode09:
+	case atmapen_dimode0A:
+	case atmapen_dimode0B:
+	case atmapen_dimode0C:
+	case atmapen_dimode0D:
+	case atmapen_dimode0E:
+	case atmapen_dimode0F:
+		if (boardio.diptr) {
+			if ((reg - atmapen_dimode00) < boardio.diptr->count) {
+				*rdptr = (leptr) &boardio.diptr->mode[reg - atmapen_dimode00];
+				*wrptr = *rdptr;
+				return EXIT_SUCCESS;
+			}
 		}
 		break;
 
@@ -368,50 +415,50 @@ uint8_t mappinginit(ModReg16bitDef reg, leptr *rdptr, leptr *wrptr) {
 		}
 		break;
 
-	case atmapen_dohld00:
-	case atmapen_dohld01:
-	case atmapen_dohld02:
-	case atmapen_dohld03:
-	case atmapen_dohld04:
-	case atmapen_dohld05:
-	case atmapen_dohld06:
-	case atmapen_dohld07:
-	case atmapen_dohld08:
-	case atmapen_dohld09:
-	case atmapen_dohld0A:
-	case atmapen_dohld0B:
-	case atmapen_dohld0C:
-	case atmapen_dohld0D:
-	case atmapen_dohld0E:
-	case atmapen_dohld0F:
+	case atmapen_dopul00:
+	case atmapen_dopul01:
+	case atmapen_dopul02:
+	case atmapen_dopul03:
+	case atmapen_dopul04:
+	case atmapen_dopul05:
+	case atmapen_dopul06:
+	case atmapen_dopul07:
+	case atmapen_dopul08:
+	case atmapen_dopul09:
+	case atmapen_dopul0A:
+	case atmapen_dopul0B:
+	case atmapen_dopul0C:
+	case atmapen_dopul0D:
+	case atmapen_dopul0E:
+	case atmapen_dopul0F:
 		if (boardio.doptr) {
-			if ((reg - atmapen_dohld00) < boardio.doptr->count) {
-				*rdptr = (leptr) &boardio.doptr->holdperiod[reg - atmapen_dohld00];
+			if ((reg - atmapen_dopul00) < boardio.doptr->count) {
+				*rdptr = (leptr) &boardio.doptr->pulsedur[reg - atmapen_dopul00];
 				*wrptr = *rdptr;
 				return EXIT_SUCCESS;
 			}
 		}
 		break;
 
-	case atmapen_dopol00:
-	case atmapen_dopol01:
-	case atmapen_dopol02:
-	case atmapen_dopol03:
-	case atmapen_dopol04:
-	case atmapen_dopol05:
-	case atmapen_dopol06:
-	case atmapen_dopol07:
-	case atmapen_dopol08:
-	case atmapen_dopol09:
-	case atmapen_dopol0A:
-	case atmapen_dopol0B:
-	case atmapen_dopol0C:
-	case atmapen_dopol0D:
-	case atmapen_dopol0E:
-	case atmapen_dopol0F:
+	case atmapen_domode00:
+	case atmapen_domode01:
+	case atmapen_domode02:
+	case atmapen_domode03:
+	case atmapen_domode04:
+	case atmapen_domode05:
+	case atmapen_domode06:
+	case atmapen_domode07:
+	case atmapen_domode08:
+	case atmapen_domode09:
+	case atmapen_domode0A:
+	case atmapen_domode0B:
+	case atmapen_domode0C:
+	case atmapen_domode0D:
+	case atmapen_domode0E:
+	case atmapen_domode0F:
 		if (boardio.doptr) {
-			if ((reg - atmapen_dopol00) < boardio.doptr->count) {
-				*rdptr = (leptr) &boardio.doptr->policy[reg - atmapen_dopol00];
+			if ((reg - atmapen_domode00) < boardio.doptr->count) {
+				*rdptr = (leptr) &boardio.doptr->mode[reg - atmapen_domode00];
 				*wrptr = *rdptr;
 				return EXIT_SUCCESS;
 			}
@@ -419,7 +466,11 @@ uint8_t mappinginit(ModReg16bitDef reg, leptr *rdptr, leptr *wrptr) {
 		break;
 
 	case atmapen_temperature:
-		*rdptr = (leptr) &BOARD_TEMPCH.RES;
+		*rdptr = (leptr) &tempscaled;
+		return EXIT_SUCCESS;
+
+	case atmapen_tempraw:
+		*rdptr = (leptr) &TEMP_CHAN.RES;
 		return EXIT_SUCCESS;
 
 	case atmapen_tempcal85:
@@ -431,7 +482,6 @@ uint8_t mappinginit(ModReg16bitDef reg, leptr *rdptr, leptr *wrptr) {
 		return EXIT_SUCCESS;
 
 	case atmapen_3v2th:
-		//*rdptr = (leptr) &BOARD_ADC.CAL;
 		*rdptr = (leptr) &MXpower.cfg.thadc3v2;
 		*wrptr = *rdptr;
 		return EXIT_SUCCESS;
@@ -458,5 +508,19 @@ void outputpinctrl(uint8_t disable) {
 			else
 				chanptr->usart.port->DIRSET = chanptr->usart.disabletxpin;		// Make pin output
 		}
+	}
+}
+
+
+/***************************************************************************
+* Clean structure data
+* [15/06/2015]
+***************************************************************************/
+void zerofill(void *ptr, uint8_t size) {
+	uint8_t					cnt;
+
+
+	for (cnt = 0; cnt < size; cnt++) {
+		((uint8_t *) ptr)[cnt] = 0;
 	}
 }

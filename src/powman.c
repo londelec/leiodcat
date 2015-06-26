@@ -2,11 +2,14 @@
  ============================================================================
  Name        : powman.c
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : Power management for MX28 board
 
   Change log  :
+
+  *********V1.01 16/06/2015**************
+  Configuration update request bit set introduced
 
   *********V1.00 12/12/2014**************
   Initial revision
@@ -30,7 +33,7 @@
 
 
 #ifdef GLOBAL_DEBUG
-//#define DEBUG_IGNORE_VDDIO
+#define DEBUG_IGNORE_VDDIO
 #define DEBUG_NOIDLECNT
 #define DEBUG_IGNORE_HBHIGH
 #endif	// GLOBAL_DEBUG
@@ -91,12 +94,16 @@ void powman_init() {
 	}
 
 
-	if (getee_data(eegren_powman, eedten_powman_thadc3v2, &eedword) == EXIT_SUCCESS) {
+	if (eeconf_get(eegren_powman, eedten_powman_thadc3v2, &eedword) == EXIT_SUCCESS) {
 		MXpower.cfg.thadc3v2 = eedword;
 	}
-	else MXpower.cfg.thadc3v2 = POWADC_3V2_VALUE;		// Default value
-	BOARD_ADC.EVCTRL |= ADC_SWEEP_01_gc;							// Sweep ADC channels 0 & 1
-	BOARD_VDDIOCH.CTRL = ADC_CH_START_bm | ADC_CH_INPUTMODE0_bm;	// Start conversion on Channel 1, single-ended positive input signal
+	else {
+		MXpower.cfg.thadc3v2 = POWADC_3V2_VALUE;		// Default value
+		boardio.eeupdatebs |= (1 << eegren_powman);
+	}
+	//BOARD_ADC.EVCTRL |= ADC_SWEEP_01_gc;							// Sweep ADC channels 0 & 1
+	BOARD_ADC.EVCTRL = ADC_SWEEP_0_gc;								// Sweep ADC channel 0
+	BOARD_VDDIOCH.CTRL = ADC_CH_START_bm | ADC_CH_INPUTMODE0_bm;	// Start conversion on Channel 0, single-ended positive input signal
 
 
 	PORTCFG.MPCMASK =									// Set configuration of all these pins simultaneously
@@ -136,6 +143,8 @@ void powman_init() {
  *>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
  * Power management processor main function
  * [04/03/2015]
+ * Output enable macro added to debug mode
+ * [16/06/2015]
  *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
  *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
  *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -240,6 +249,7 @@ uint8_t powman_mainproc() {
 			else if (MXpower.tmotcnt > POW_VDDIO3V3_TIMEOUT) {	// If VDDIO didn't go above 3.2V for 0.1 seconds
 #ifdef DEBUG_IGNORE_VDDIO
 				MXpower.state = powst_idle;
+				POWMANF_ENABLE_OUTPUTS	// Enable other output pins
 #else
 				POWMANF_DISABLE_OUTPUTS	// Disable other output pins
 				POWER_GATE_3V3_OFF		// Turn off peripheral power 3V3

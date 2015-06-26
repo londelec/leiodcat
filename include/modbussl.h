@@ -2,11 +2,14 @@
 ============================================================================
  Name        : Modbussl.h
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for Modbus ASCII/RTU/TCP communication protocol slave module
 
   Change log  :
+
+  *********V1.01 12/06/2015**************
+  New register search and count validation functions created
 
   *********V1.00 12/12/2014**************
   Initial revision
@@ -167,18 +170,20 @@ typedef struct Modbussl_applayer_ {
 
 
 // Version string made public to allow access from main
-extern const lechar *ModbusslVersion;
+//extern const lechar *ModbusslVersion;
 
 
 Modbussl_applayer *Modbussl_preappinit(void);
 void Modbussl_postappinit(Modbussl_applayer *applayer, uint8_t mapsize);
 void Modbussl_regmeminit(Modbussl_applayer *applayer, uint8_t mapsize);
-uint8_t Modbussl_appprocess(Modbussl_applayer *applayer, uint8_t *rxtxbuff, uint8_t charmult);
-uint8_t Modbussl_rdslaveid(uint8_t *txbuff, uint8_t charmult);
+uint8_t Modbussl_appprocess(Modbussl_applayer *applayer, uint8_t *rxtxbuff);
+uint8_t Modbussl_rdslaveid(uint8_t *txbuff);
+uint8_t Modbussl_searchreg(Modbussl_applayer *applayer, ModReg16bitDef regaddr, uint16_t *memoffset);
+uint8_t Modbussl_validregcnt(Modbussl_applayer *applayer, ModReg16bitDef regaddr, ModReg16bitDef regcount, uint16_t memoffset);
 
-uint8_t Modbussl_message(uint8_t *txbuff, uint8_t charmult, ModbusRegStr *regptr, uint8_t count);
-uint8_t Modbussl_eeblock(uint8_t *txbuff, uint8_t charmult, ModReg16bitDef reg, uint8_t count);
-uint8_t Modbussl_exception(uint8_t *txbuff, uint8_t charmult, ModData8bitDef excpt);
+uint8_t Modbussl_message(uint8_t *txbuff, ModbusRegStr *regptr, uint8_t count);
+uint8_t Modbussl_eeblock(uint8_t *txbuff, ModReg16bitDef reg, uint8_t count);
+uint8_t Modbussl_exception(uint8_t *txbuff, ModData8bitDef excpt);
 
 
 #endif /* MODBUSSL_H_ */

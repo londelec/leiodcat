@@ -100,7 +100,7 @@ typedef struct Modbussl_pointers_ {
 
 
 // Version string made public to allow access from main
-extern const lechar *ModbusVersion;
+//extern const lechar *ModbusVersion;
 
 void Modbussl_preinit(GenProtocolStr *genprotocol, DevAddrDef devaddr);
 Modbus_shared_linklayer *Modbus_initshared(StatStr *currentsta);

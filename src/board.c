@@ -2,11 +2,18 @@
  ============================================================================
  Name        : board.c
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : board hardware module
 
   Change log  :
+
+  *********V1.01 12/06/2015**************
+  Scaled temperature calculation created
+  ADCB is used for temperature measurements
+  CRC of EEPROM configuration is being verified on startup
+  Configuration update request bit set introduced
+  DI modes added
 
   *********V1.00 12/12/2014**************
   Initial revision
@@ -30,8 +37,10 @@
 
 
 
-BOARD_t 	boardio;
+boardstr 	boardio;
 uint16_t	caltemp85;			// Temperature calibration value from NVM
+uint16_t	tempscaled, templast = 0;	// Temperature scaled and last value register
+float		caltempfloat;		// Temperature calibration float value, for scaled temperature calculation
 
 
 #ifdef GLOBAL_DEBUG
@@ -54,17 +63,25 @@ uint16_t	caltemp85;			// Temperature calibration value from NVM
 /***************************************************************************
 * Initialize board hardware
 * [26/02/2015]
+* ADCB is used for temperature measurements
+* [14/06/2015]
 ***************************************************************************/
 void board_init() {
-	uint16_t			factorycal;
+	uint16_t			adcafactorycal, adcbfactorycal;
 
-
+	clock_init();					// Init system clock first
 #ifndef DISABLE_BOARD_AUTOID		// Disable automatic board ID identification using resistors on port PE
 	PORTCFG.MPCMASK = BOARD_AUTOID_MASK;	// Mask pins which are not used as ID inputs
 	BOARD_AUTOID_MCUPORT.PIN0CTRL |= PORT_OPC_PULLUP_gc;			// Enable pull-up resistors
 	for (uint8_t cnt = 0; cnt < 32; cnt++) {}						// Wait a little bit before reading inputs
 	BoardHardware = BOARD_AUTOID_MCUPORT.IN & BOARD_AUTOID_MASK;	// Read board ID resistors
 #endif // DISABLE_BOARD_AUTOID
+
+
+	zerofill(&boardio, sizeof(boardio));		// Clean board structure
+	if (eeconf_crc(0) == EXIT_FAILURE) {		// Check EEPROM configuration CRC
+		boardio.rflags |= BOARDRF_EECONF_CORRUPTED;
+	}
 
 
 	switch (BoardHardware) {
@@ -118,7 +135,6 @@ void board_init() {
 	}
 
 
-	clock_init();
 	leddrv_init();
 
 
@@ -132,23 +148,33 @@ void board_init() {
 
 	// Read factory calibration register from program memory (ROM)
 	NVM_CMD = NVM_CMD_READ_CALIB_ROW_gc;
-	factorycal = pgm_read_byte(0x20);
-	factorycal |= pgm_read_byte(0x21) << 8;
+	adcafactorycal = pgm_read_byte(0x20);
+	adcafactorycal |= pgm_read_byte(0x21) << 8;
+	adcbfactorycal = pgm_read_byte(0x24);
+	adcbfactorycal |= pgm_read_byte(0x25) << 8;
 	caltemp85 = pgm_read_byte(0x2E);
 	caltemp85 |= pgm_read_byte(0x2F) << 8;
 	NVM_CMD = NVM_CMD_NO_OPERATION_gc;
-	BOARD_ADC.CAL = factorycal;				// Set factory calibration word
-	//BOARD_ADC.CAL = 0x0000;
+	ADCA.CAL = adcafactorycal;							// Set factory calibration word
+	ADCB.CAL = adcbfactorycal;							// Set factory calibration word
 
 
 	BOARD_ADC.CTRLA = ADC_ENABLE_bm;					// Enable ADCA
 	//BOARD_ADC.CTRLB = ADC_FREERUN_bm;					// Free running mode (don't need to start conversion manually)
-	BOARD_ADC.CTRLB = ADC_FREERUN_bm | ADC_CONMODE_bm;	// Free running mode (don't need to start conversion manually), signed conversion
-	//BOARD_ADC.REFCTRL = ADC_REFSEL0_bm; 				// Select INTVCC as reference input
-	BOARD_ADC.REFCTRL = ADC_REFSEL0_bm | ADC_TEMPREF_bm; // Select INTVCC as reference input, enable temperature measurement
+	BOARD_ADC.CTRLB = ADC_FREERUN_bm | ADC_CONMODE_bm;	// Free running mode, signed conversion
+	BOARD_ADC.REFCTRL = ADC_REFSEL0_bm; 				// Select INTVCC as reference input
+	//BOARD_ADC.REFCTRL = ADC_REFSEL0_bm | ADC_TEMPREF_bm; // Select INTVCC as reference input, enable temperature measurement
 	BOARD_ADC.PRESCALER = ADC_PRESCALER_gm;				// Divide peripheral clock by 512
-	BOARD_TEMPCH.CTRL = ADC_CH_START_bm;				// Start conversion on Channel 0
 
+
+	TEMP_ADC.CTRLA = ADC_ENABLE_bm;						// Enable ADCB
+	TEMP_ADC.CTRLB = ADC_FREERUN_bm;					// Free running mode (don't need to start conversion manually)
+	//TEMP_ADC.CTRLB = ADC_FREERUN_bm | ADC_CONMODE_bm;	// Free running mode, signed conversion
+	TEMP_ADC.REFCTRL = ADC_TEMPREF_bm; 					// Select INT1V (bandgap) as reference input, enable temperature measurement
+	TEMP_ADC.PRESCALER = ADC_PRESCALER_gm;				// Divide peripheral clock by 512
+	TEMP_ADC.EVCTRL = ADC_SWEEP_0_gc;					// Sweep ADC channel 0
+	TEMP_CHAN.CTRL = ADC_CH_START_bm;					// Start conversion on Channel 0
+	caltempfloat = caltemp85 / 3.49609375;				// Calibration value / ((85 + 273) * 10 / 1024) calibration temperature in Kelvins and multipliers for scaling
 
 	//enable watchdog timer 256ms
 	//wdt_enable(WDT_PER_256CLK_gc);
@@ -161,26 +187,41 @@ void board_init() {
 /***************************************************************************
 * Initialize digital inputs
 * [24/02/2015]
+* DI modes added
+* [12/06/2015]
 ***************************************************************************/
 void initboardDI(uint8_t dicount, uint8_t baseoffset) {
 	uint8_t				cnt;
 	uint32_t			eedword;
+	uint8_t				reqeeupdate = 0;
 
 
 	boardio.diptr = calloc(1, sizeof(boardDIstr));
 	boardio.diptr->count = dicount;
-
 	boardio.diptr->samples = calloc(dicount, sizeof(uint16_t));
+	boardio.diptr->mode = calloc(dicount, sizeof(dimodeenum));
 	boardio.diptr->filterconst = calloc(dicount, sizeof(uint16_t));
 	boardio.diptr->bitoffset = calloc(dicount, sizeof(uint8_t));
 
 	for (cnt = 0; cnt < dicount; cnt++) {
 		boardio.diptr->bitoffset[cnt] = (baseoffset + cnt);
-		if (getee_data(eegren_board, (eedten_board_diflt00 + cnt), &eedword) == EXIT_SUCCESS) {
+		if (eeconf_get(eegren_board, (eedten_board_dimode00 + cnt), &eedword) == EXIT_SUCCESS) {
+			boardio.diptr->mode[cnt] = eedword;
+		}
+		else {
+			boardio.diptr->mode[cnt] = dimden_spi;
+			reqeeupdate = 1;
+		}
+		if (eeconf_get(eegren_board, (eedten_board_diflt00 + cnt), &eedword) == EXIT_SUCCESS) {
 			boardio.diptr->filterconst[cnt] = eedword;
 		}
-		else boardio.diptr->filterconst[cnt] = DI_DEFAULT_FILTER_MSEC;
+		else {
+			boardio.diptr->filterconst[cnt] = DI_DEFAULT_FILTER_MSEC;
+			reqeeupdate = 1;
+		}
 	}
+	if (reqeeupdate)		// EEPROM update required
+		boardio.eeupdatebs |= (1 << eegren_board);
 }
 
 
@@ -191,25 +232,34 @@ void initboardDI(uint8_t dicount, uint8_t baseoffset) {
 void initboardDO(uint8_t docount, uint8_t baseoffset) {
 	uint8_t				cnt;
 	uint32_t			eedword;
+	uint8_t				reqeeupdate = 0;
 
 
 	boardio.doptr = calloc(1, sizeof(boardDOstr));
 	boardio.doptr->count = docount;
 	boardio.doptr->samples = calloc(docount, sizeof(uint16_t));
-	boardio.doptr->holdperiod = calloc(docount, sizeof(uint16_t));
+	boardio.doptr->mode = calloc(docount, sizeof(domodeenum));
+	boardio.doptr->pulsedur = calloc(docount, sizeof(uint16_t));
 	boardio.doptr->bitoffset = calloc(docount, sizeof(uint8_t));
-	boardio.doptr->policy = calloc(docount, sizeof(dopolicyenum));
 	for(cnt = 0; cnt < docount; cnt++) {
 		boardio.doptr->bitoffset[cnt] = (baseoffset + cnt);
-		if (getee_data(eegren_board, (eedten_board_dohld00 + cnt), &eedword) == EXIT_SUCCESS) {
-			boardio.doptr->holdperiod[cnt] = eedword;
+		if (eeconf_get(eegren_board, (eedten_board_domode00 + cnt), &eedword) == EXIT_SUCCESS) {
+			boardio.doptr->mode[cnt] = eedword;
 		}
-		else boardio.doptr->holdperiod[cnt] = DO_DEFAULT_HOLD_MSEC;
-		if (getee_data(eegren_board, (eedten_board_dopol00 + cnt), &eedword) == EXIT_SUCCESS) {
-			boardio.doptr->policy[cnt] = eedword;
+		else {
+			boardio.doptr->mode[cnt] = domden_pulseout;
+			reqeeupdate = 1;
 		}
-		else boardio.doptr->policy[cnt] = dopolen_holdperiod;
+		if (eeconf_get(eegren_board, (eedten_board_dopul00 + cnt), &eedword) == EXIT_SUCCESS) {
+			boardio.doptr->pulsedur[cnt] = eedword;
+		}
+		else {
+			boardio.doptr->pulsedur[cnt] = DO_DEFAULT_HOLD_MSEC;
+			reqeeupdate = 1;
+		}
 	}
+	if (reqeeupdate)		// EEPROM update required
+		boardio.eeupdatebs |= (1 << eegren_board);
 }
 
 
@@ -225,10 +275,10 @@ void board_mainproc() {
 
 	if (doptr) {
 		for (cnt = 0; cnt < doptr->count; cnt++) {
-			switch (doptr->policy[cnt]) {
-			case dopolen_holdperiod:
+			switch (doptr->mode[cnt]) {
+			case domden_pulseout:
 				if (doptr->dostates & (1 << cnt)) {
-					if (doptr->samples[cnt] >= doptr->holdperiod[cnt]) {	// Release DO if activate and samples expired
+					if (doptr->samples[cnt] >= doptr->pulsedur[cnt]) {	// Release DO if activate and samples expired
 						releaseDO(doptr, cnt);
 					}
 				}
@@ -273,6 +323,7 @@ void board_mainproc() {
 			}
 		}
 	}
+	calctemperature();
 }
 
 
@@ -374,8 +425,8 @@ inline void boardisr_1ms() {
 
 	if (doptr) {
 		for (cnt = 0; cnt < doptr->count; cnt++) {
-			switch (doptr->policy[cnt]) {
-			case dopolen_holdperiod:
+			switch (doptr->mode[cnt]) {
+			case domden_pulseout:
 				if (doptr->dostates & (1 << cnt)) {		// Check bit of the particular DO
 					doptr->samples[cnt]++;
 				}
@@ -389,6 +440,30 @@ inline void boardisr_1ms() {
 }
 
 
+
+
+/***************************************************************************
+* Calculate temperature value
+* [14/06/2015]
+***************************************************************************/
+void calctemperature() {
+	uint32_t	int32val;
+
+
+	int32val = TEMP_CHAN.RESL;			// !!! Lowbyte must be read first
+	int32val |= (TEMP_CHAN.RESH << 8);	// And lowbyte and highbyte reads must be kept separate
+
+	int32val -= ATMELMCU_ADC_USIGNOFS;	// ADC offset value when using unsigned mode
+	//int32val <<= 8;
+	int32val <<= 10;					// Increases calculation precision so we can drop decimal part
+	int32val = int32val / caltempfloat;	// Calculate actual temperature, it is ok to drop decimal part
+	tempscaled = int32val - 2730;		// Subtract Celsius 0 degree value which is adjusted for precision
+	if (!templast) templast = tempscaled;	// Initial last value
+	else {
+		templast += ((tempscaled - templast) >> 1);
+		templast = tempscaled;
+	}
+}
 
 
 

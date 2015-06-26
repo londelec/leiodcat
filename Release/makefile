@@ -87,7 +87,7 @@ clean:
 	-@echo ' '
 
 pre-build:
-	-./createbuilddate.sh
+	-./createbuilddate.sh "const char FirmwareDate[] PROGMEM"
 	-@echo ' '
 
 secondary-outputs: $(LSS) $(FLASH_IMAGE) $(EEPROM_IMAGE) $(SIZEDUMMY)
