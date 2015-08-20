@@ -2,11 +2,14 @@
  ============================================================================
  Name        : Modbussl.c
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : Modbus ASCII/RTU/TCP communication protocol application layer slave module
 
   Change log  :
+
+  *********V1.02 18/08/2015**************
+  EEPROM configuration data validation added
 
   *********V1.01 12/06/2015**************
   Character multiplier is no longer passed to application layer
@@ -131,6 +134,8 @@ void Modbussl_regmeminit(Modbussl_applayer *applayer, uint8_t mapsize) {
  * Register search and validation moved to separate functions
  * Modus function 0x10 added
  * [12/06/2015]
+ * EEPROM configuration data validation added
+ * [20/08/2015]
  *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
  *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
  *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -138,8 +143,10 @@ void Modbussl_regmeminit(Modbussl_applayer *applayer, uint8_t mapsize) {
 uint8_t Modbussl_appprocess(Modbussl_applayer *applayer, uint8_t *rxtxbuff) {
 	ModReg16bitDef			regaddr;
 	ModReg16bitDef			regcount;
+	ModData16bitDef			rcvddata;
 	uint16_t				memoffset;
 	uint16_t				cnt;
+	uint8_t					updatereq = 0;
 
 
 	regaddr = (rxtxbuff[MODBOFS_XREGH] << 8) | rxtxbuff[MODBOFS_XREGL];
@@ -176,17 +183,30 @@ uint8_t Modbussl_appprocess(Modbussl_applayer *applayer, uint8_t *rxtxbuff) {
 	case MODFUNC_06:
 		if (Modbussl_searchreg(applayer, regaddr, &memoffset) == EXIT_SUCCESS) {
 			if (applayer->regmem[memoffset].wrdata) {	// Check if register is writable
-				if (
-						(applayer->regmem[memoffset].wrdata[0] != rxtxbuff[MODBOFS_06DATL]) ||
-						(applayer->regmem[memoffset].wrdata[1] != rxtxbuff[MODBOFS_06DATH])) {
-					applayer->regmem[memoffset].wrdata[0] = rxtxbuff[MODBOFS_06DATL];	// Write lowbyte to a mapped register
-					applayer->regmem[memoffset].wrdata[1] = rxtxbuff[MODBOFS_06DATH];	// Write highbyte to a mapped register
-					eeconf_update(&applayer->regmem[memoffset]);
+
+				rcvddata = rxtxbuff[MODBOFS_06DATH];
+				rcvddata <<= 8;
+				rcvddata |= rxtxbuff[MODBOFS_06DATL];
+
+				if (*applayer->regmem[memoffset].wrdata != rcvddata) {
+					if (eeconf_validate(regaddr, rcvddata, &updatereq) == EXIT_SUCCESS) {
+						*applayer->regmem[memoffset].wrdata = rcvddata;		// Write received data to a mapped register
+
+
+						checkeeupdate:
+						if (updatereq) {	// Data was different from stored value, request eeprom update
+							eeconf_update(&applayer->regmem[memoffset]);
+						}
+					}
+					else {
+						illegaldataexception:
+						return Modbussl_exception(rxtxbuff, MODEX_ILLEGAL_DATA_VAL);
+					}
 				}
 				return (4);			// Echo the received message
 			}
 		}
-		return Modbussl_exception(rxtxbuff, MODEX_ILLEGAL_DATA_ADDR);
+		goto addrlenexception;	// requested register count validation failed
 		//break;
 
 
@@ -196,23 +216,30 @@ uint8_t Modbussl_appprocess(Modbussl_applayer *applayer, uint8_t *rxtxbuff) {
 
 		if (Modbussl_searchreg(applayer, regaddr, &memoffset) == EXIT_SUCCESS) {
 			if (Modbussl_validregcnt(applayer, regaddr, regcount, memoffset) == EXIT_SUCCESS) {
-				for (cnt = 0; cnt < regcount; cnt++) {		// Check if all registers are writable
+
+
+				for (cnt = 0; cnt < regcount; cnt++) {		// Check if all registers are writable and received data is valid
 					if (!applayer->regmem[memoffset + cnt].wrdata) goto addrlenexception;	// current register is not writable
-				}
-				uint8_t	updatereq = 0;
-				for (cnt = 0; cnt < regcount; cnt++) {		// Check and write received data to register memory
-					if (
-							(applayer->regmem[memoffset + cnt].wrdata[0] != rxtxbuff[MODBOFS_10DATL(cnt << 1)]) ||
-							(applayer->regmem[memoffset + cnt].wrdata[1] != rxtxbuff[MODBOFS_10DATH(cnt << 1)])) {
-						applayer->regmem[memoffset + cnt].wrdata[0] = rxtxbuff[MODBOFS_10DATL(cnt << 1)];	// Write lowbyte to a mapped register
-						applayer->regmem[memoffset + cnt].wrdata[1] = rxtxbuff[MODBOFS_10DATH(cnt << 1)];	// Write highbyte to a mapped register
-						updatereq = 1;
+
+					rcvddata = rxtxbuff[MODBOFS_10DATH(cnt << 1)];
+					rcvddata <<= 8;
+					rcvddata |= rxtxbuff[MODBOFS_10DATL(cnt << 1)];
+					if (*applayer->regmem[memoffset + cnt].wrdata != rcvddata) {
+						if (eeconf_validate(regaddr + cnt, rcvddata, &updatereq) == EXIT_FAILURE)
+							goto illegaldataexception;
 					}
 				}
-				if (updatereq) {		// Data was different to comparing to stored values, request eeprom update
-					eeconf_update(&applayer->regmem[memoffset]);
+
+
+				for (cnt = 0; cnt < regcount; cnt++) {
+					rcvddata = rxtxbuff[MODBOFS_10DATH(cnt << 1)];
+					rcvddata <<= 8;
+					rcvddata |= rxtxbuff[MODBOFS_10DATL(cnt << 1)];
+
+					*applayer->regmem[memoffset + cnt].wrdata = rcvddata;	// Write received data to a mapped register
 				}
-				return (4);		// Echo part of the received message - register address and register count
+				goto checkeeupdate;
+				//return (4);		// Echo part of the received message - register address and register count
 			}
 		}
 		goto addrlenexception;	// requested register count validation failed

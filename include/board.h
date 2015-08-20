@@ -2,11 +2,17 @@
 ============================================================================
  Name        : board.h
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for board hardware module
 
   Change log  :
+
+  *********V1.02 18/08/2015**************
+  Default configuration pin and flag created
+  DI and DO mode enums removed, now using ones defined in modbusdef.h
+  Board UART setting structure created to enable configuration updates
+  Board hardware profile table structure created
 
   *********V1.01 12/06/2015**************
   ADCB is used for temperature measurements and calculation function created
@@ -25,6 +31,7 @@
 
 #include "ledefs.h"
 #include "atmeldefs.h"
+#include "modbusdef.h"
 
 
 
@@ -52,7 +59,8 @@
 // Board runtime flags
 #define BOARDRF_EVENT				0x01
 #define BOARDRF_UPDATE_LED			0x02
-#define BOARDRF_EECONF_CORRUPTED	0x10
+#define BOARDRF_EECONF_CORRUPTED	0x10			// EEPROM configuration is corrupted, i.e. CRC failed
+#define BOARDRF_DEFCONF				0x20			// Default configuration pin is asserted
 
 
 ///#define bit_clear(p,m)  ((p) &= ~(1 << (m)))
@@ -61,25 +69,9 @@
 //#define bit_toggle(p,m) (p ^= (1 << m))
 
 
-// Input operation modes
-// Last value is 0xFFFF because modes are
-// mapped directly to Modbus registers and need to have 2 bytes
-typedef enum {
-	dimden_spi						= 1,
-	dimden_undefined				= 0xFFFF
-} LEOPACK dimodeenum;
-
-
-// Output operation modes
-typedef enum {
-	domden_pulseout					= 1,
-	domden_undefined				= 0xFFFF
-} LEOPACK domodeenum;
-
-
 typedef struct boardDIstr_ {
 	uint16_t				*samples;					// Sampling counter of each input
-	dimodeenum				*mode;						// Operation mode of each input
+	modbusdimodeenum		*mode;						// Operation mode of each input
 	uint16_t				*filterconst;				// Filter constant in miliseconds of each input
 	uint8_t					*bitoffset;					// Bit offset of each input
 	uint16_t				distates;					// Realtime DI states, mapped to MODBUS
@@ -89,7 +81,7 @@ typedef struct boardDIstr_ {
 
 typedef struct boardDOstr_ {
 	uint16_t				*samples;					// Sampling counter of each output
-	domodeenum				*mode;						// Operation mode of each output
+	modbusdomodeenum		*mode;						// Operation mode of each output
 	uint16_t				*pulsedur;					// Output pulse duration in miliseconds
 	uint8_t					*bitoffset;					// Bit offset of each output
 	uint16_t				dostates;					// Realtime DO states, mapped to MODBUS
@@ -98,17 +90,40 @@ typedef struct boardDOstr_ {
 } boardDOstr;
 
 
+typedef struct boarduarteestr_ {
+	uint16_t 				brenum;						// Baudrate enum
+	uint16_t				timeoutl;					// Timeout lowword ! Don't swap these, this will break EEPROM layout
+	uint16_t				timeouth;					// Timeout highword ! Don't swap these, this will break EEPROM layout
+	uint16_t				txdelayl;					// Tx delay lowword ! Don't swap these, this will break EEPROM layout
+	uint16_t				txdelayh;					// Tx delay highword ! Don't swap these, this will break EEPROM layout
+	uint16_t				t35;						// t35 timeout
+	uint16_t				parity;						// Parity
+	uint16_t 				devaddr;					// Device address
+} boarduarteestr;
+
+
 typedef struct boardstr_ {
 	uint8_t					rflags;						// Runtime flags
 	boardDIstr				*diptr;						// DI structure pointer, initialized of board has DIs
 	boardDOstr				*doptr;						// DO structure pointer, initialized of board has DOs
 	uint8_t					ledoepin;					// Output enable (OE) pin of 74LV541
+	uint8_t					defcfgpin;					// Default configuration pin
 	PORT_t					*ctrlport;					// MCU control port
 	uint16_t				mapsize;					// Actual count of modbus mapped registers
 	mcubitsetDef			eeupdatebs;					// EEPROM configuration update bit set
 	mcubitsetDef			eerdmask;					// EEPROM read masks (bit set)
 	mcubitsetDef			eewrmask;					// EEPROM write masks (bit set)
+	boarduarteestr	 		uartee;						// Pointer to main UART
 } boardstr;
+
+
+typedef struct boardhwtablestr_  {
+	athwenum				type;
+	uint8_t					dicount;
+	uint8_t					docount;
+	uint8_t					dioffs;
+	uint8_t					dooffs;
+} boardhwtablestr;
 
 
 extern boardstr	boardio;
@@ -124,6 +139,7 @@ uint8_t checkotherdoactive(boardDOstr *doptr, uint8_t doindex);
 void activateDO(boardDOstr *doptr, uint8_t doindex);
 void releaseDO(boardDOstr *doptr, uint8_t doindex);
 void calctemperature();
+void getboardhw(boardhwtablestr *hwptr);
 
 void boardisr_1ms();
 

@@ -45,7 +45,7 @@ struct mcueecfgstr EEMEM eepromcfg = {					// Initialize configuration data
 
 		.uart0_head.id = eegren_uart0,
 		.uart0_head.size = (((uint16_t) &eepromcfg.uart0_address) - ((uint16_t) &eepromcfg.uart0_head) - sizeof(mcueegrphead) + sizeof(eepromcfg.uart0_address)),
-		.EEDATA_ENTER(uart0_baudrate, uart, baudrate, 115200)
+		.EEDATA_ENTER(uart0_baudrate, uart, baudrate, atbr115200)
 		.EEDATA_ENTER(uart0_parity, uart, parity, 'E')
 		.EEDATA_ENTER(uart0_txdelay, uart, txdelay, 500)
 		.EEDATA_ENTER(uart0_address, uart, address, 1)

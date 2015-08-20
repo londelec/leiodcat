@@ -9,6 +9,7 @@
   Change log  :
 
   *********V1.02 13/06/2015**************
+  DI/AI/DO object processing modes added
   Application buffer byte offsets added
 
   *********V1.01 24/02/2015**************
@@ -132,6 +133,28 @@ typedef enum {
 	MODEX_GW_PATH_UNAVAILABLE			= 10,
 	MODEX_GW_TARGET_DEV_NORESP			= 11,
 } LEOPACK MODBUS_EXCPT;
+
+
+
+
+// Input operation modes
+// Last value is 0xFFFF because modes are
+// mapped directly to Modbus registers and need to have 2 bytes
+typedef enum {
+	modbusdimden_spi					= 1,
+	modbusdimden_undefined				= 0xFFFF
+} LEOPACK modbusdimodeenum;
+
+typedef enum {
+	modbusaimden_intbigend				= 1,
+	modbusaimden_undefined				= 0xFFFF
+} LEOPACK modbusaimodeenum;
+
+// Output operation modes
+typedef enum {
+	modbusdomden_pulseout				= 1,
+	modbusdomden_undefined				= 0xFFFF
+} LEOPACK modbusdomodeenum;
 
 
 #endif /* MODBUSDEF_H_ */

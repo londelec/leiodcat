@@ -2,11 +2,15 @@
  ============================================================================
  Name        : powman.c
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : Power management for MX28 board
 
   Change log  :
+
+  *********V1.02 17/08/2015**************
+  New hardware 3100 without MX board
+  Heartbeat output pin created
 
   *********V1.01 16/06/2015**************
   Configuration update request bit set introduced
@@ -18,6 +22,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 //#include <stdlib.h>
 //#include <stdint.h>
 #include <avr/io.h>
@@ -33,9 +38,9 @@
 
 
 #ifdef GLOBAL_DEBUG
-#define DEBUG_IGNORE_VDDIO
+//#define DEBUG_IGNORE_VDDIO
 #define DEBUG_NOIDLECNT
-#define DEBUG_IGNORE_HBHIGH
+//#define DEBUG_IGNORE_HBHIGH
 #endif	// GLOBAL_DEBUG
 
 
@@ -61,32 +66,41 @@ MXpowStr MXpower;
 /***************************************************************************
 * Initialize power manager module
 * [04/03/2015]
+* New hardware 3100 without MX board
+* Heartbeat output pin created
+* [19/08/2015]
 ***************************************************************************/
 void powman_init() {
 	uint32_t			eedword;
-	uint8_t				cnt;
+	//uint8_t				cnt;
 
 
+	memset(&MXpower, 0, sizeof(MXpower));				// Clean powman structure
 	MXpower.state = powst_init;
-	POWMANF_SET_MTIMER(POW_STARTUP_DELAY)					// Set 3V8 enable delay constant
+	POWMANF_SET_MTIMER(POW_STARTUP_DELAY)				// Set 3V8 enable delay constant
 
 
 	switch (BoardHardware) {
 	/*case somerevision:
 		break;*/
 
+	case athwenat3100v11:
+		BOARD_VDDIOCH.MUXCTRL = ADC_CH_MUXPOS_PIN1_gc;	// PORTA pin 1 selected
+		MXpower.cfg.pinhbout = PIN0_bm;					// MB_SSP3_MISO
+		MXpower.state = powst_idle;						// Override state
+		break;
+
 	case athwenmx3100v11:
 		BOARD_VDDIOCH.MUXCTRL = ADC_CH_MUXPOS_PIN1_gc;	// PORTA pin 1 selected
-		MXpower.cfg.pinhb = PIN0_bm;					// MB_SSP3_MISO
+		MXpower.cfg.pinhbin = PIN0_bm;					// MB_SSP3_MISO
 		MXpower.cfg.pin3v3gate = PIN4_bm;				// 3V3_POWER_GATE
 		MXpower.cfg.pin3v8gate = PIN5_bm;				// 3V8_POWER_GATE
 		MXpower.cfg.pinpowsw = PIN7_bm;					// POWERON_GATE
-
 		break;
 
 	default:
 		BOARD_VDDIOCH.MUXCTRL = ADC_CH_MUXPOS_PIN6_gc;	// PORTA pin 6 selected
-		MXpower.cfg.pinhb = 0;							// Not used
+		MXpower.cfg.pinhbin = 0;						// Not used
 		MXpower.cfg.pin3v3gate = PIN4_bm;				// 3V3_POWER_GATE
 		MXpower.cfg.pin3v8gate = PIN5_bm;				// 3V8_POWER_GATE
 		MXpower.cfg.pinpowsw = PIN7_bm;					// POWERON_GATE
@@ -106,30 +120,42 @@ void powman_init() {
 	BOARD_VDDIOCH.CTRL = ADC_CH_START_bm | ADC_CH_INPUTMODE0_bm;	// Start conversion on Channel 0, single-ended positive input signal
 
 
-	PORTCFG.MPCMASK =									// Set configuration of all these pins simultaneously
-			MXpower.cfg.pin3v8gate |
-			MXpower.cfg.pin3v3gate |
-			MXpower.cfg.pinpowsw;
-	boardio.ctrlport->PIN0CTRL = PORT_OPC_WIREDAND_gc;	// Wired-AND configuration
+	if (
+			MXpower.cfg.pin3v8gate ||
+			MXpower.cfg.pin3v3gate ||
+			MXpower.cfg.pinpowsw) {						// If any of output pins which require Wired-AND configuration is enabled
+		PORTCFG.MPCMASK =								// Set configuration of all these pins simultaneously
+				MXpower.cfg.pin3v8gate |
+				MXpower.cfg.pin3v3gate |
+				MXpower.cfg.pinpowsw;
+		boardio.ctrlport->PIN0CTRL = PORT_OPC_WIREDAND_gc;	// Wired-AND configuration
+	}
+
+
 	boardio.ctrlport->OUTSET = 							// Set pins to logic 1 before setting direction
 			MXpower.cfg.pin3v8gate |
 			MXpower.cfg.pin3v3gate |
-			MXpower.cfg.pinpowsw;
+			MXpower.cfg.pinpowsw |
+			MXpower.cfg.pinhbout;
 	boardio.ctrlport->DIRSET =							// Change direction to output
 			MXpower.cfg.pin3v8gate |
 			MXpower.cfg.pin3v3gate |
-			MXpower.cfg.pinpowsw;
-	boardio.ctrlport->DIRCLR = MXpower.cfg.pinhb;		// Change direction to input
+			MXpower.cfg.pinpowsw |
+			MXpower.cfg.pinhbout;
 
 
-	if (MXpower.cfg.pinhb) {
-		for (cnt = 0; cnt < 8; cnt++) {
+	if (MXpower.cfg.pinhbin) {		// Heartbeat input pin
+		boardio.ctrlport->DIRCLR = MXpower.cfg.pinhbin;		// Change direction to input
+		PORTCFG.MPCMASK = MXpower.cfg.pinhbin;
+		boardio.ctrlport->PIN0CTRL = PORT_ISC_FALLING_gc;
+		//pinctrl_setbit(boardio.ctrlport, MXpower.cfg.pinhbin, PORT_ISC_FALLING_gc);	// Falling edge interrupt
+		/*for (cnt = 0; cnt < 8; cnt++) {
 			if (MXpower.cfg.pinhb == (1 << cnt)) {
 				(&boardio.ctrlport->PIN0CTRL)[cnt] |= PORT_ISC_FALLING_gc;	// Falling edge interrupt
 				break;
 			}
-		}
-		boardio.ctrlport->INT1MASK = MXpower.cfg.pinhb;		// Enable heartbeat pin interrupt
+		}*/
+		boardio.ctrlport->INT1MASK = MXpower.cfg.pinhbin;	// Enable heartbeat pin interrupt
 		boardio.ctrlport->INTCTRL = (boardio.ctrlport->INTCTRL & ~PORT_INT1LVL_gm) | PORT_INT1LVL_LO_gc;	// Enable port interrupt
 	}
 }
@@ -145,6 +171,8 @@ void powman_init() {
  * [04/03/2015]
  * Output enable macro added to debug mode
  * [16/06/2015]
+ * Heartbeat output pin created
+ * [19/08/2015]
  *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
  *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
  *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -187,7 +215,7 @@ uint8_t powman_mainproc() {
 	case powst_checkhb:
 		if (POWMANF_CHECK_MTIMER == EXIT_SUCCESS) {
 			POWMANF_SET_MTIMER(POW_T1MSEC)			// Set heartbeat checking interval = 1msec
-			if (boardio.ctrlport->IN & MXpower.cfg.pinhb) {	// Heartbeat pin must be high
+			if (boardio.ctrlport->IN & MXpower.cfg.pinhbin) {	// Heartbeat pin must be high
 				MXpower.poscnt++;
 				if (MXpower.tmotcnt) MXpower.tmotcnt--;
 			}
@@ -263,28 +291,39 @@ uint8_t powman_mainproc() {
 
 
 	case powst_idle:
-#ifndef DEBUG_IGNORE_VDDIO
 		if (POWMANF_CHECK_MTIMER == EXIT_SUCCESS) {
-			adcvalue = BOARD_VDDIOCH.RES;
-			if (
-					!(adcvalue & 0x8000) &&					// ADC integer must be positive
-					(adcvalue > MXpower.cfg.thadc3v2)) {
-				POWMANF_SET_MTIMER(POW_T1SEC);				// VDDIO checking interval in idle state
+			if (MXpower.cfg.pinpowsw) {		// Check ADC and idle counter if power switch pin is defined
+#ifndef DEBUG_IGNORE_VDDIO
+				adcvalue = BOARD_VDDIOCH.RES;
+				if (
+						!(adcvalue & 0x8000) &&					// ADC integer must be positive
+						(adcvalue > MXpower.cfg.thadc3v2)) {
+					POWMANF_SET_MTIMER(POW_T1SEC);				// VDDIO checking interval in idle state
 #ifndef DEBUG_NOIDLECNT
-				if (MXpower.idlecnt) MXpower.idlecnt--;
-				if (MXpower.idlecnt)
+					if (MXpower.idlecnt) MXpower.idlecnt--;
+					if (MXpower.idlecnt)
 #endif	// DEBUG NOIDLECNT
-					return EXIT_SUCCESS;
-
-			}
-			POWMANF_DISABLE_OUTPUTS	// Disable other output pins
-			POWER_GATE_3V3_OFF		// Turn off peripheral power 3V3
-			POWER_GATE_3V8_OFF		// Turn off MX28 board supply 3V8
-			POWMANF_SET_MTIMER(POW_REPOWER_DELAY);	// Delay before new power cycle
-			MXpower.state = powst_init;
-			return EXIT_FAILURE;
-		}
+						return EXIT_SUCCESS;
+				}
+				POWMANF_DISABLE_OUTPUTS	// Disable other output pins
+				POWER_GATE_3V3_OFF		// Turn off peripheral power 3V3
+				POWER_GATE_3V8_OFF		// Turn off MX28 board supply 3V8
+				POWMANF_SET_MTIMER(POW_REPOWER_DELAY);	// Delay before new power cycle
+				MXpower.state = powst_init;
+				return EXIT_FAILURE;
 #endif	// DEBUG IGNORE VDDIO
+			}
+			else if (MXpower.cfg.pinhbout) {	// Heartbeat output pin is defined
+				if (boardio.ctrlport->IN & MXpower.cfg.pinhbout) {	// Heartbeat pin is high, LED is OFF
+					POWMANF_SET_MTIMER(POW_HBLED_ON);
+					boardio.ctrlport->OUTCLR = MXpower.cfg.pinhbout;
+				}
+				else {		// Heartbeat pin is low, LED is ON
+					POWMANF_SET_MTIMER(POW_HBLED_OFF);
+					boardio.ctrlport->OUTSET = MXpower.cfg.pinhbout;
+				}
+			}
+		}
 		return EXIT_SUCCESS;
 		//break;
 

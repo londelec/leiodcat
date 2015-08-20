@@ -2,11 +2,17 @@
  ============================================================================
  Name        : board.c
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : board hardware module
 
   Change log  :
+
+  *********V1.02 17/08/2015**************
+  New hardware 3100 without MX board
+  Board hardware profile table and handling functions created
+  Default configuration pin created
+  DI and DO mode enums now defined in modbusdef.h
 
   *********V1.01 12/06/2015**************
   Scaled temperature calculation created
@@ -58,6 +64,13 @@ float		caltempfloat;		// Temperature calibration float value, for scaled tempera
 #define LED_CONTROL_PIN_ON	if (boardio.ledoepin) boardio.ctrlport->OUTCLR = boardio.ledoepin;
 
 
+const boardhwtablestr boardhwtable[] PROGMEM = {
+	{athwenundefined, 	12, 	4, 		0, 		0x0C},
+	{athwenmx3100v11,	12,		4,		0, 		0x0C},
+	{athwenat3100v11,	12,		4, 		0, 		0x0C},
+};
+
+
 
 
 /***************************************************************************
@@ -65,9 +78,15 @@ float		caltempfloat;		// Temperature calibration float value, for scaled tempera
 * [26/02/2015]
 * ADCB is used for temperature measurements
 * [14/06/2015]
+* New hardware 3100 without MX board
+* Changes related to board hardware profile table creation
+* Default configuration pin created
+* [19/08/2015]
 ***************************************************************************/
 void board_init() {
-	uint16_t			adcafactorycal, adcbfactorycal;
+	uint16_t		adcafactorycal, adcbfactorycal;
+	boardhwtablestr boardhw;
+
 
 	clock_init();					// Init system clock first
 #ifndef DISABLE_BOARD_AUTOID		// Disable automatic board ID identification using resistors on port PE
@@ -77,69 +96,77 @@ void board_init() {
 	BoardHardware = BOARD_AUTOID_MCUPORT.IN & BOARD_AUTOID_MASK;	// Read board ID resistors
 #endif // DISABLE_BOARD_AUTOID
 
-
-	zerofill(&boardio, sizeof(boardio));		// Clean board structure
+	memset(&boardio, 0, sizeof(boardio));		// Clean board structure
+	memset(&boardhw, 0, sizeof(boardhw));		// Clean board hardware structure
 	if (eeconf_crc(0) == EXIT_FAILURE) {		// Check EEPROM configuration CRC
 		boardio.rflags |= BOARDRF_EECONF_CORRUPTED;
 	}
+
+
+	PORTCFG.MPCMASK = 0xFF;					// Apply new configuration to all pins (no mask)
+	PORTF.PIN0CTRL |= PORT_INVEN_bm;		// Invert all pins
+	PORTF.DIR = 0;							// Set direction to input for all pins
+
+	PORTCFG.MPCMASK = 0xFF;					// Apply new configuration to DI pins (mask highbyte)
+	PORTH.PIN0CTRL |= PORT_INVEN_bm;		// Invert all pins
+
+	PORTCFG.VPCTRLA = PORTCFG_VP0MAP_PORTF_gc | PORTCFG_VP1MAP_PORTH_gc;	// Map MCU ports to virtual ports
+
+	boardio.ctrlport = &PORTK;				// Control port
+
+	getboardhw(&boardhw);					// Get board hardware settings
 
 
 	switch (BoardHardware) {
 	/*case somerevision:
 		break;*/
 
-	case athwenmx3100v11:
-		PORTCFG.MPCMASK = 0xFF;					// Apply new configuration to all pins (no mask)
-		PORTF.PIN0CTRL |= PORT_INVEN_bm;		// Invert all pins
-		PORTF.DIR = 0;							// Set direction to input for all pins
-
-		PORTCFG.MPCMASK = 0xFF;					// Apply new configuration to DI pins (mask highbyte)
-		PORTH.PIN0CTRL |= PORT_INVEN_bm;		// Invert all pins
+	case athwenat3100v11:
 		PORTH.OUT = 0x00;						// Clear Outputs - logic 0, but pins driven high because of inversion
 		PORTH.DIR = 0xF0;						// Pins [0..3] are inputs, pins [4..7] outputs
-
-		PORTCFG.VPCTRLA = PORTCFG_VP0MAP_PORTF_gc | PORTCFG_VP1MAP_PORTH_gc;	// Map MCU ports to virtual ports
-
-		initboardDI(12, 0);						// Initialize all inputs
-		initboardDO(4, 0x0C);					// Initialize all outputs
-		boardio.ctrlport = &PORTK;				// Control port
 		boardio.ledoepin = PIN6_bm;				// LED OE pin
-		boardio.mapsize =
-				MODBUS_SYSREG_COUNT +
-				(MODBUS_DIMULT * 12) + 1 +
-				(MODBUS_DOMULT * 4) + 1;
+		boardio.defcfgpin = PIN4_bm;			// Default configuration input pin
+		break;
+
+	case athwenmx3100v11:
+		PORTH.OUT = 0x00;						// Clear Outputs - logic 0, but pins driven high because of inversion
+		PORTH.DIR = 0xF0;						// Pins [0..3] are inputs, pins [4..7] outputs
+		boardio.ledoepin = PIN6_bm;				// LED OE pin
 		break;
 
 
 	default:
-		PORTCFG.MPCMASK = 0xFF;					// Apply new configuration to all pins (no mask)
-		PORTF.PIN0CTRL |= PORT_INVEN_bm;		// Invert all pins
-		PORTF.DIR = 0;							// Set direction to input for all pins
-
-		PORTCFG.MPCMASK = 0xFF;					// Apply new configuration to DI pins (mask highbyte)
-		PORTH.PIN0CTRL |= PORT_INVEN_bm;		// Invert all pins
 		PORTH.OUT = 0x00;						// Clear Outputs - logic 0, but pins driven high because of inversion
 		PORTH.DIR = 0xF0;						// Pins [0..3] are inputs, pins [4..7] outputs
-
-		PORTCFG.VPCTRLA = PORTCFG_VP0MAP_PORTF_gc | PORTCFG_VP1MAP_PORTH_gc;	// Map MCU ports to virtual ports
-
-		initboardDI(12, 0);						// Initialize all inputs
-		initboardDO(4, 0x0C);					// Initialize all outputs
-		boardio.ctrlport = &PORTK;				// Control port
 		boardio.ledoepin = 0;					// LED OE pin is not used
-		boardio.mapsize =
-				MODBUS_SYSREG_COUNT +
-				(MODBUS_DIMULT * 12) + 1 +
-				(MODBUS_DOMULT * 4) + 1;
 		break;
 	}
+
+
+	initboardDI(boardhw.dicount, boardhw.dioffs);	// Initialize all inputs
+	initboardDO(boardhw.docount, boardhw.dooffs);	// Initialize all outputs
+	boardio.mapsize =
+			MODBUS_SYSREG_COUNT +
+			(MODBUS_DIMULT * boardhw.dicount) + 1 +
+			(MODBUS_DOMULT * boardhw.docount) + 1;
 
 
 	leddrv_init();
 
 
-	LED_CONTROL_PIN_ON							// Activate LED CONTROL (OE) pin
-	if (boardio.ledoepin) boardio.ctrlport->DIRSET = boardio.ledoepin;
+	LED_CONTROL_PIN_ON			// Activate LED CONTROL (OE) pin
+	if (boardio.ledoepin) boardio.ctrlport->DIRSET = boardio.ledoepin;	// LED OE pin is output
+
+
+	if (boardio.defcfgpin) {	// Default configuration input pin
+		boardio.ctrlport->DIRCLR = boardio.defcfgpin;		// Change direction to input
+		PORTCFG.MPCMASK = boardio.defcfgpin;
+		boardio.ctrlport->PIN0CTRL = PORT_OPC_PULLUP_gc;
+		for (uint8_t cnt = 0; cnt < 32; cnt++) {}			// Wait a little bit before reading input
+		if (!(boardio.ctrlport->IN & boardio.defcfgpin)) {	// Check default configuration pin
+			boardio.rflags |= BOARDRF_DEFCONF;				// Set default configuration flag
+		}
+	}
 
 
 	PMIC.CTRL |= PMIC_LOLVLEN_bm;		// Enable low level interrupts
@@ -189,6 +216,8 @@ void board_init() {
 * [24/02/2015]
 * DI modes added
 * [12/06/2015]
+* DI and DO mode enums now defined in modbusdef.h
+* [19/08/2015]
 ***************************************************************************/
 void initboardDI(uint8_t dicount, uint8_t baseoffset) {
 	uint8_t				cnt;
@@ -199,7 +228,7 @@ void initboardDI(uint8_t dicount, uint8_t baseoffset) {
 	boardio.diptr = calloc(1, sizeof(boardDIstr));
 	boardio.diptr->count = dicount;
 	boardio.diptr->samples = calloc(dicount, sizeof(uint16_t));
-	boardio.diptr->mode = calloc(dicount, sizeof(dimodeenum));
+	boardio.diptr->mode = calloc(dicount, sizeof(modbusdimodeenum));
 	boardio.diptr->filterconst = calloc(dicount, sizeof(uint16_t));
 	boardio.diptr->bitoffset = calloc(dicount, sizeof(uint8_t));
 
@@ -209,7 +238,7 @@ void initboardDI(uint8_t dicount, uint8_t baseoffset) {
 			boardio.diptr->mode[cnt] = eedword;
 		}
 		else {
-			boardio.diptr->mode[cnt] = dimden_spi;
+			boardio.diptr->mode[cnt] = modbusdimden_spi;
 			reqeeupdate = 1;
 		}
 		if (eeconf_get(eegren_board, (eedten_board_diflt00 + cnt), &eedword) == EXIT_SUCCESS) {
@@ -228,6 +257,8 @@ void initboardDI(uint8_t dicount, uint8_t baseoffset) {
 /***************************************************************************
 * Initialize digital outputs
 * [24/02/2015]
+* DI and DO mode enums now defined in modbusdef.h
+* [19/08/2015]
 ***************************************************************************/
 void initboardDO(uint8_t docount, uint8_t baseoffset) {
 	uint8_t				cnt;
@@ -238,7 +269,7 @@ void initboardDO(uint8_t docount, uint8_t baseoffset) {
 	boardio.doptr = calloc(1, sizeof(boardDOstr));
 	boardio.doptr->count = docount;
 	boardio.doptr->samples = calloc(docount, sizeof(uint16_t));
-	boardio.doptr->mode = calloc(docount, sizeof(domodeenum));
+	boardio.doptr->mode = calloc(docount, sizeof(modbusdomodeenum));
 	boardio.doptr->pulsedur = calloc(docount, sizeof(uint16_t));
 	boardio.doptr->bitoffset = calloc(docount, sizeof(uint8_t));
 	for(cnt = 0; cnt < docount; cnt++) {
@@ -247,7 +278,7 @@ void initboardDO(uint8_t docount, uint8_t baseoffset) {
 			boardio.doptr->mode[cnt] = eedword;
 		}
 		else {
-			boardio.doptr->mode[cnt] = domden_pulseout;
+			boardio.doptr->mode[cnt] = modbusdomden_pulseout;
 			reqeeupdate = 1;
 		}
 		if (eeconf_get(eegren_board, (eedten_board_dopul00 + cnt), &eedword) == EXIT_SUCCESS) {
@@ -266,6 +297,8 @@ void initboardDO(uint8_t docount, uint8_t baseoffset) {
 /***************************************************************************
 * Board IO main process
 * [25/02/2015]
+* DI and DO mode enums now defined in modbusdef.h
+* [19/08/2015]
 ***************************************************************************/
 void board_mainproc() {
 	uint8_t				cnt;
@@ -276,7 +309,7 @@ void board_mainproc() {
 	if (doptr) {
 		for (cnt = 0; cnt < doptr->count; cnt++) {
 			switch (doptr->mode[cnt]) {
-			case domden_pulseout:
+			case modbusdomden_pulseout:
 				if (doptr->dostates & (1 << cnt)) {
 					if (doptr->samples[cnt] >= doptr->pulsedur[cnt]) {	// Release DO if activate and samples expired
 						releaseDO(doptr, cnt);
@@ -390,6 +423,8 @@ void releaseDO(boardDOstr *doptr, uint8_t doindex) {
 /***************************************************************************
 * 1ms ISR for IO processing
 * [24/02/2015]
+* DI and DO mode enums now defined in modbusdef.h
+* [19/08/2015]
 ***************************************************************************/
 inline void boardisr_1ms() {
 	uint8_t				cnt;
@@ -426,7 +461,7 @@ inline void boardisr_1ms() {
 	if (doptr) {
 		for (cnt = 0; cnt < doptr->count; cnt++) {
 			switch (doptr->mode[cnt]) {
-			case domden_pulseout:
+			case modbusdomden_pulseout:
 				if (doptr->dostates & (1 << cnt)) {		// Check bit of the particular DO
 					doptr->samples[cnt]++;
 				}
@@ -462,6 +497,28 @@ void calctemperature() {
 	else {
 		templast += ((tempscaled - templast) >> 1);
 		templast = tempscaled;
+	}
+}
+
+
+/***************************************************************************
+* Get board harware settings
+* [18/08/2015]
+***************************************************************************/
+void getboardhw(boardhwtablestr *hwptr) {
+	uint8_t					tabcnt;
+	athwenum				hwtype;
+
+
+	for (tabcnt = 0; tabcnt < (ARRAY_SIZE(boardhwtable)); tabcnt++) {
+		hwtype = pgm_read_byte(&boardhwtable[tabcnt].type);			// Read hardware type from program space
+		if (hwtype == BoardHardware) {
+			*((uint32_t *) &hwptr->dicount) = pgm_read_dword(&boardhwtable[tabcnt].dicount);	// Read DI count from program space
+			//hwptr->docount = pgm_read_byte(&boardhwtable[tabcnt].docount);	// Read DO count from program space
+			//hwptr->dioffs = pgm_read_byte(&boardhwtable[tabcnt].dioffs);	// Read DI base offset from program space
+			//hwptr->dooffs = pgm_read_byte(&boardhwtable[tabcnt].dooffs);	// Read DO base offset from program space
+			return;
+		}
 	}
 }
 

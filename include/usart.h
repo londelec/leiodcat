@@ -2,11 +2,14 @@
  ============================================================================
  Name        : usart.h
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for Atmel UART
 
   Change log  :
+
+  *********V1.01 18/08/2015**************
+  RTS pin added to initialization function
 
   *********V1.00 19/02/2015**************
   Initial revision
@@ -37,16 +40,8 @@
 #define UARTRTF_BUFFOVFL				0x01
 
 
-//#define USART_RXC_vect					USARTE1_RXC_vect
-//#define USART_DRE_vect					USARTE1_DRE_vect
-//#define USART_TXC_vect					USARTE1_TXC_vect
-
-
-//#define USART_LED_PORT					PORTB
-//#define USART_LED_TX_PIN_bm				PIN1_bm
-//#define USART_LED_RX_PIN_bm				PIN2_bm
-//#define USART_LED_ER_PIN_bm				PIN3_bm
-
+// UART default settings
+#define DEFAULT_PARITY					'E'				// Default parity
 
 
 /*! \brief Struct used when interrupt driven driver is used.
@@ -92,9 +87,9 @@
 
 
 
-void usart_init(uartatstr *uartptr, uint32_t baudrate, uint8_t parity);
-void usartport_init(uartatstr *uartptr, USART_t *mcuuart, PORT_t *mcuport, uint8_t outputpin, uint8_t inputpin, uint8_t disabletx);
-void usarthw_init(uartatstr *uartptr, uint32_t baudrate, uint8_t parity, uint16_t rxtxbuffsize);
+void usart_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity);
+void usartport_init(uartatstr *uartptr, USART_t *mcuuart, PORT_t *mcuport, PORT_t *ctrlport, uint8_t outputpin, uint8_t inputpin, uint8_t disabletx, uint8_t rtspin);
+void usarthw_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity, uint16_t rxtxbuffsize);
 
 CHStateEnum channelrx(StatStr *staptr, uint8_t *rxbuffer, TxRx16bitDef *rxlength);
 CHStateEnum channeltx(StatStr *staptr, uint8_t *txbuffer, TxRx16bitDef txlength);

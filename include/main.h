@@ -2,11 +2,16 @@
  ============================================================================
  Name        : main.h
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for LEIODC MCU main module
 
   Change log  :
+
+  *********V1.02 18/08/2015**************
+  Modbus mapping created for UART settings
+  Baudrate enums, table structure and handling functions created
+  UART setting update functionality introduced
 
   *********V1.01 12/06/2015**************
   Modbus mapping changes
@@ -134,7 +139,15 @@ typedef enum {
 	atmapen_tempcal85,								// Temperature calibration value at 85 degrees
 	atmapen_vddio,									// VDDIO voltage measurement
 	atmapen_3v2th,									// 3V2 measurement threshold
-#define MODBUS_SYSREG_COUNT		6					// Number of system register to be mapped
+	atmapen_baudrate			= 0x0080,			// Baudrate
+	atmapen_parity				= 0x0081,			// Parity
+	atmapen_txdelayh			= 0x0082,			// TX delay highword
+	atmapen_txdelayl			= 0x0083,			// TX delay lowword
+	atmapen_timeouth			= 0x0084,			// Timeout highword
+	atmapen_timeoutl			= 0x0085,			// Timeout lowword
+	atmapen_t35					= 0x0086,			// t35 Timeout
+	atmapen_devaddr				= 0x0087,			// Device address
+#define MODBUS_SYSREG_COUNT		14					// Number of system register to be mapped
 	atmapen_direg				= 0x0100,			// DI status register
 	atmapen_dimode00			= 0x0110,			// DI modes
 	atmapen_dimode01,
@@ -205,6 +218,22 @@ typedef enum {
 #define MODBUS_DOMULT			2				// Number of register for each DO (multiplier)
 } LEOPACK atmappingenum;
 
+
+
+// Baudrate enums
+typedef enum {
+	atbrundefined				= 0x00,
+	atbr300						= 0x11,
+	atbr600						= 0x12,
+	atbr1200					= 0x13,
+	atbr2400					= 0x14,
+	atbr4800					= 0x15,
+	atbr9600					= 0x16,
+	atbr19200					= 0x17,
+	atbr38400					= 0x18,
+	atbr57600					= 0x19,
+	atbr115200					= 0x1A,
+} LEOPACK atbaudrateenum;
 
 
 
@@ -294,6 +323,17 @@ typedef struct hardwarenamestr_  {
 } hardwarenamestr;
 
 
+/*typedef struct regvalidtablestr_  {
+	atmappingenum 			mapreg;
+	ModData16bitDef			lowlimit;
+	ModData16bitDef			highlimit;
+} regvalidtablestr;*/
+
+typedef struct UARTBaudrateStr_  {
+	atbaudrateenum			brenum;
+	atbaudratedef 			baudrate;
+} UARTBaudrateStr;
+
 
 
 // Always define global variables in C source file
@@ -316,7 +356,10 @@ GenProtocolStr *genprotinit();
 uint8_t gethwname(lechar *hwnamebuff, uint8_t bufflen);
 uint8_t mappinginit(ModReg16bitDef reg, leptr *rdptr, leptr *wrptr);
 void outputpinctrl(uint8_t disable);
-void zerofill(void *ptr, uint8_t size);
+//void pinctrl_setbit(PORT_t *mcuport, uint8_t pin, uint8_t setbit);
+uint8_t baudrateconv(uint16_t brenum16, atbaudratedef *baudrate);
+uint8_t uartsettvalidate(atmappingenum mapreg, ModData16bitDef val);
+//uint8_t updatecfg_validate(atmappingenum mapreg, ModData16bitDef val);
 
 
 #endif /* MAIN_H_ */

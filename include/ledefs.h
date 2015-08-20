@@ -10,6 +10,7 @@
 
   *********V1.08 22/06/2015**************
   Londelec Unix second definition added
+  Boolean check macro added
 
   *********V1.07 16/02/2015**************
   EXIT_SUCCESS and EXIT_FAILURE need to be defined for Atmel
@@ -80,6 +81,7 @@
 #define LEOPACK						__attribute__ ((packed))	// Pack in order to save memory, optional
 #endif // MOXA W3X5A
 #define LEWEAK						__attribute__((weak))		// Function initialized as weak, normally replaced by driver
+#define LELIBCONSTRUCTOR			__attribute__ ((constructor))	// Library initialization constructor, executed before library loads
 
 
 // This is normally defined in 'bits/time.h',

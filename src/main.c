@@ -2,11 +2,18 @@
  ============================================================================
  Name        : main.c
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : LEIODC MCU main module
 
   Change log  :
+
+  *********V1.02 19/08/2015**************
+  New hardware 3100 without MX board
+  Baudrate enums, table and handling functions created
+  UART setting update functionality introduced
+  t35 timeout automatic calculation added
+  Default configuration flag created
 
   *********V1.01 12/06/2015**************
   Firmware string constants and tables moved to flash memory
@@ -43,7 +50,7 @@
 
 
 #define	FWVERSION_MAJOR			1			// Firmware version number major
-#define	FWVERSION_MINOR			2			// Firmware version number minor
+#define	FWVERSION_MINOR			3			// Firmware version number minor
 #if FWVERSION_MINOR < 10
 #define	FWVERSION_10TH_ZERO		"0"
 #else
@@ -58,7 +65,7 @@ const lechar FirmwareVersion[] PROGMEM = " FirmwareVersion="\
 #include "builddate.txt"
 
 
-#define	HARDCODED_UART_SETTINGS				// Don't load UART setting from EEPROM
+//#define	HARDCODED_UART_SETTINGS				// Don't load UART setting from EEPROM
 
 
 // Board hardware type
@@ -74,9 +81,31 @@ GenProtocolStr			*Gprotocol0ptr = NULL;
 
 const lechar athwenundefinedc[] PROGMEM = "Unknown";
 const lechar athwenmx3100v11c[] PROGMEM = "LEIODC-MX-3100";
+const lechar athwenat3100v11c[] PROGMEM = "LEIODC-AT-3100";
 const hardwarenamestr hwnametable[] PROGMEM = {
 	{athwenundefined, 		(leptr) athwenundefinedc},
 	{athwenmx3100v11,	 	(leptr) athwenmx3100v11c},
+	{athwenat3100v11,	 	(leptr) athwenat3100v11c},
+};
+
+
+//const regvalidtablestr regvalidtable[] PROGMEM = {
+//	{atmapen_devaddr, 		1,						254},
+//};
+
+
+const UARTBaudrateStr UARTBaudrateTable[] PROGMEM =
+{
+	{atbr300,				300},
+	{atbr600,				600},
+	{atbr1200,				1200},
+	{atbr2400,				2400},
+	{atbr4800,				4800},
+	{atbr9600,				9600},
+	{atbr19200,				19200},
+	{atbr38400,				38400},
+	{atbr57600,				57600},
+	{atbr115200,			115200},
 };
 
 
@@ -132,16 +161,22 @@ int main(void) {
 /***************************************************************************
 * Initialize communication interfaces
 * [17/02/2015]
+* UART setting update functionality introduced
+* t35 timeout automatic calculation added
+* Default configuration flag created
+* [18/08/2015]
 ***************************************************************************/
 void comms_init() {
 	ChannelStr			*chanptr;
 	StatStr				*staptr;
 	GenProtocolStr		*genprotocol;
 	uint32_t			eedword;
-	uint32_t 			baudrate = 115200;
-	uint8_t 			parity = 'E';
-	uint8_t				devaddr = 1;
-	TimerConstDef 		t35 = 0;				// Undefined, default value will be used
+	atbaudratedef		baudrate = 0;
+	atparitydef			parity;
+	atbaudrateenum		defaultbr;
+	uint8_t				devaddr;
+	uint16_t			t35;
+	uint8_t				reqeeupdate = 0;
 
 
 	chanptr = channelinit();		// Initialize new channel
@@ -150,7 +185,24 @@ void comms_init() {
 	staptr->channelinst = chanptr;	// Link station to channel
 	genprotocol->statptr = staptr;	// Link general protocol to station
 	chanptr->serialsta = staptr;	// Select serial station
-	chanptr->chtimeout = DEFAULT_TIMEOUT;	// Default value 5sec
+	boardio.uartee.parity = DEFAULT_PARITY;	// Default parity
+	*((atuarttodef *) &boardio.uartee.timeoutl) = DEFAULT_TIMEOUT;	// Default value 5sec
+	boardio.uartee.t35 = 0;			// Undefined, default value will be used
+	boardio.uartee.devaddr = 1;		// Default address
+
+
+	switch (BoardHardware) {
+	/*case somerevision:
+		break;*/
+	case athwenat3100v11:
+		defaultbr = atbr9600;		// Default baudrate
+		break;
+	case athwenmx3100v11:
+	default:
+		defaultbr = atbr115200;		// Default baudrate
+		break;
+	}
+	boardio.uartee.brenum = defaultbr;
 
 
 #ifdef HARDCODED_UART_SETTINGS
@@ -158,18 +210,40 @@ void comms_init() {
 #endif
 
 
-	if (eeconf_get(eegren_uart0, eedten_uart_address, &eedword) == EXIT_SUCCESS)
-		devaddr = eedword;
-	if (eeconf_get(eegren_uart0, eedten_uart_baudrate, &eedword) == EXIT_SUCCESS)	// Read baudrate
-		baudrate = eedword;
-	if (eeconf_get(eegren_uart0, eedten_uart_parity, &eedword) == EXIT_SUCCESS)		// Read parity
-		parity = eedword;
-	if (eeconf_get(eegren_uart0, eedten_uart_txdelay, &eedword) == EXIT_SUCCESS)	// Read tx delay
-		chanptr->chtxdelay = eedword;
-	if (eeconf_get(eegren_uart0, eedten_uart_timeout, &eedword) == EXIT_SUCCESS)	// Read timeout
-		chanptr->chtimeout = eedword;
-	if (eeconf_get(eegren_uart0, eedten_uart_t35, &eedword) == EXIT_SUCCESS)		// Read t35 timeout
-		t35 = eedword;
+	if (eeconf_get(eegren_uart0, eedten_uart_baudrate, &eedword) == EXIT_SUCCESS) {
+		if (baudrateconv(eedword, &baudrate) == EXIT_SUCCESS)
+			boardio.uartee.brenum = eedword;
+		else reqeeupdate = 1;
+	}
+	else reqeeupdate = 1;
+
+	if (eeconf_get(eegren_uart0, eedten_uart_parity, &eedword) == EXIT_SUCCESS) {
+		if (uartsettvalidate(atmapen_parity, eedword) == EXIT_SUCCESS)
+			boardio.uartee.parity = eedword;
+		else reqeeupdate = 1;
+	}
+	else reqeeupdate = 1;
+
+	if (eeconf_get(eegren_uart0, eedten_uart_txdelay, &eedword) == EXIT_SUCCESS)
+		*((atuarttodef *) &boardio.uartee.txdelayl) = eedword;
+	else reqeeupdate = 1;
+
+	if (eeconf_get(eegren_uart0, eedten_uart_timeout, &eedword) == EXIT_SUCCESS)
+		*((atuarttodef *) &boardio.uartee.timeoutl) = eedword;
+	else reqeeupdate = 1;
+
+	if (eeconf_get(eegren_uart0, eedten_uart_t35, &eedword) == EXIT_SUCCESS) {
+		boardio.uartee.t35 = eedword;
+	}
+	else reqeeupdate = 1;
+
+	if (eeconf_get(eegren_uart0, eedten_uart_address, &eedword) == EXIT_SUCCESS) {
+		if (uartsettvalidate(atmapen_devaddr, eedword) == EXIT_SUCCESS)
+			boardio.uartee.devaddr = eedword;
+		else reqeeupdate = 1;
+	}
+	else reqeeupdate = 1;
+
 
 	//if (baudrate > 19200) {
 	//	chanptr-> tperiod = 35 * USART_FRAME35_TIMER_50US_TICKS;	/* ~1750us. */
@@ -179,7 +253,36 @@ void comms_init() {
 	//}
 
 
-	usart_init(&chanptr->usart, baudrate, parity);						// Initialize UART
+	if ((!baudrate) || (boardio.rflags & BOARDRF_DEFCONF)) {
+		baudrateconv(defaultbr, &baudrate);			// Set default baudrate
+	}
+
+
+	if (boardio.rflags & BOARDRF_DEFCONF) {
+		parity = DEFAULT_PARITY;
+		chanptr->chtimeout = DEFAULT_TIMEOUT;
+		chanptr->chtxdelay = 0;
+		t35 = (350000 / baudrate);
+		devaddr = 1;
+	}
+	else {
+		if (boardio.uartee.t35 < (350000 / baudrate)) {	// Ensure t35 is at least 35 bits long
+			boardio.uartee.t35 = (350000 / baudrate);
+			reqeeupdate = 1;
+		}
+		t35 = boardio.uartee.t35;
+		parity = boardio.uartee.parity;
+		chanptr->chtimeout = *((atuarttodef *) &boardio.uartee.timeoutl);
+		chanptr->chtxdelay = *((atuarttodef *) &boardio.uartee.txdelayl);
+		devaddr = boardio.uartee.devaddr;
+	}
+
+
+	if (reqeeupdate)		// EEPROM update required
+		boardio.eeupdatebs |= (1 << eegren_uart0);
+
+
+	usart_init(&chanptr->usart, baudrate, parity);	// Initialize UART
 	Modbussl_preinit(genprotocol, devaddr);
 	Modbussl_postinit(genprotocol, t35, boardio.mapsize);
 }
@@ -337,6 +440,8 @@ uint8_t gethwname(lechar *hwnamebuff, uint8_t bufflen) {
 /***************************************************************************
 * Initialize protocol mapping
 * [28/02/2015]
+* UART settings mapped
+* [18/08/2015]
 ***************************************************************************/
 uint8_t mappinginit(ModReg16bitDef reg, leptr *rdptr, leptr *wrptr) {
 
@@ -465,6 +570,46 @@ uint8_t mappinginit(ModReg16bitDef reg, leptr *rdptr, leptr *wrptr) {
 		}
 		break;
 
+	case atmapen_baudrate:
+		*rdptr = (leptr) &boardio.uartee.brenum;
+		*wrptr = *rdptr;
+		return EXIT_SUCCESS;
+
+	case atmapen_parity:
+		*rdptr = (leptr) &boardio.uartee.parity;
+		*wrptr = *rdptr;
+		return EXIT_SUCCESS;
+
+	case atmapen_txdelayh:
+		*rdptr = (leptr) &boardio.uartee.txdelayh;
+		*wrptr = *rdptr;
+		return EXIT_SUCCESS;
+
+	case atmapen_txdelayl:
+		*rdptr = (leptr) &boardio.uartee.txdelayl;
+		*wrptr = *rdptr;
+		return EXIT_SUCCESS;
+
+	case atmapen_timeouth:
+		*rdptr = (leptr) &boardio.uartee.timeouth;
+		*wrptr = *rdptr;
+		return EXIT_SUCCESS;
+
+	case atmapen_timeoutl:
+		*rdptr = (leptr) &boardio.uartee.timeoutl;
+		*wrptr = *rdptr;
+		return EXIT_SUCCESS;
+
+	case atmapen_t35:
+		*rdptr = (leptr) &boardio.uartee.t35;
+		*wrptr = *rdptr;
+		return EXIT_SUCCESS;
+
+	case atmapen_devaddr:
+		*rdptr = (leptr) &boardio.uartee.devaddr;
+		*wrptr = *rdptr;
+		return EXIT_SUCCESS;
+
 	case atmapen_temperature:
 		*rdptr = (leptr) &tempscaled;
 		return EXIT_SUCCESS;
@@ -513,14 +658,110 @@ void outputpinctrl(uint8_t disable) {
 
 
 /***************************************************************************
-* Clean structure data
-* [15/06/2015]
+* Set bit in pincontrol structure of a particular pin
+* [17/08/2015]
 ***************************************************************************/
-void zerofill(void *ptr, uint8_t size) {
-	uint8_t					cnt;
+/*void pinctrl_setbit(PORT_t *mcuport, uint8_t pin, uint8_t setbit) {
+	uint8_t			cnt;
 
 
-	for (cnt = 0; cnt < size; cnt++) {
-		((uint8_t *) ptr)[cnt] = 0;
+	for (cnt = 0; cnt < 8; cnt++) {
+		if (pin == (1 << cnt)) {
+			(&mcuport->PIN0CTRL)[cnt] |= setbit;
+			break;
+		}
 	}
+}*/
+
+
+/***************************************************************************
+* Convert between baudrate enum and decimal value or vice versa
+* [19/08/2015]
+***************************************************************************/
+uint8_t baudrateconv(uint16_t brenum16, atbaudratedef *baudrate) {
+	uint8_t			cnt;
+	atbaudrateenum	tabenum;
+	atbaudratedef	tabbrval;
+
+
+	for (cnt = 0; cnt < (ARRAY_SIZE(UARTBaudrateTable)); cnt++) {
+		tabenum = pgm_read_byte(&UARTBaudrateTable[cnt].brenum);		// Read baudrate enum from program space
+		tabbrval = pgm_read_dword(&UARTBaudrateTable[cnt].baudrate);	// Read baudrate value from program space
+		if (tabenum == brenum16) {
+			if (baudrate) *baudrate = tabbrval;
+			return EXIT_SUCCESS;
+		}
+		//else if (baudrate && *baudrate && (tabbrval == *baudrate)) {
+		//	if (brenum16) *brenum16 = tabenum;
+		//	return EXIT_SUCCESS;
+		//}
+	}
+	return EXIT_FAILURE;	// Baudrate not found
 }
+
+
+/***************************************************************************
+* Validate UART setting
+* [19/08/2015]
+***************************************************************************/
+uint8_t uartsettvalidate(atmappingenum mapreg, ModData16bitDef val) {
+
+	switch (mapreg) {
+	case atmapen_baudrate:
+		if (baudrateconv(val, NULL) == EXIT_FAILURE) goto failed;
+		break;
+
+	case atmapen_parity:
+		switch (val) {
+		case 'N':		// 0x4E
+		case 'E':		// 0x45
+		case 'O':		// 0x4F
+		//case 'M':		// 0x4D
+		//case 'S':		// 0x53
+			break;
+		default:
+			goto failed;
+		}
+		break;
+
+	case atmapen_txdelayh:
+		if (val > 1) goto failed;	// Tx delay must be less than 0x3FFFF (13.1071sec)
+		break;
+
+	case atmapen_devaddr:
+		if ((val < 1) || (val > 254)) goto failed;
+		break;
+
+	default:	// Don't validate undefined settings, assume OK
+		break;
+	}
+	return EXIT_SUCCESS;	// Setting is valid
+
+	failed:
+	return EXIT_FAILURE;	// Setting is invalid
+}
+
+
+/***************************************************************************
+* Validate data before updating EEPROM configuration
+* [18/08/2015]
+***************************************************************************/
+/*uint8_t updatecfg_validate(atmappingenum mapreg, ModData16bitDef val) {
+	uint8_t			cnt;
+	ModReg16bitDef	tabreg;
+	ModData16bitDef	lowlimit, highlimit;
+
+
+	for (cnt = 0; cnt < (ARRAY_SIZE(regvalidtable)); cnt++) {
+		tabreg = pgm_read_word(&regvalidtable[cnt].mapreg);				// Read register from program space
+		if (mapreg == tabreg) {
+			lowlimit = pgm_read_word(&regvalidtable[cnt].lowlimit);		// Read low limit from program space
+			highlimit = pgm_read_word(&regvalidtable[cnt].highlimit);	// Read high limit from program space
+			if ((val >= lowlimit) && (val <= highlimit))
+				return EXIT_SUCCESS;
+			else
+				return EXIT_FAILURE;
+		}
+	}
+	return EXIT_SUCCESS;	// Assume data is valid if not found in the table
+}*/

@@ -2,11 +2,16 @@
  ============================================================================
  Name        : usart.c
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : Atmel UART module
 
   Change log  :
+
+  *********V1.01 17/08/2015**************
+  Fixed: Baudrate calculation fixed by changing bselval to 16bit
+  New hardware 3100 without MX board
+  RTS pin control added
 
   *********V1.00 12/12/2014**************
   Initial revision
@@ -33,8 +38,8 @@
 
 
 // PIN manipulation macros
-#define UART_RTS_RELEASE	if (uartptr->rtspin) (uartptr->port->OUTSET = uartptr->rtspin);
-#define UART_RTS_ACTIVATE	if (uartptr->rtspin) (uartptr->port->OUTCLR = uartptr->rtspin);
+#define UART_RTS_RELEASE	if (uartptr->rtspin) (uartptr->ctrlport->OUTSET = uartptr->rtspin);
+#define UART_RTS_ACTIVATE	if (uartptr->rtspin) (uartptr->ctrlport->OUTCLR = uartptr->rtspin);
 #define UART_TXLED_ON		if (uartptr->led) uartptr->led->port->OUTCLR = uartptr->led->txled;
 #define UART_TXLED_OFF		if (uartptr->led) uartptr->led->port->OUTSET = uartptr->led->txled;
 #define UART_RXLED_ON		if (uartptr->led) uartptr->led->port->OUTCLR = uartptr->led->rxled;
@@ -46,34 +51,31 @@
 /***************************************************************************
 * Initialize UART
 * [18/02/2015]
+* New hardware 3100 without MX board
+* RTS pin control added
+* [20/08/2015]
 ***************************************************************************/
-void usart_init(uartatstr *uartptr, uint32_t baudrate, uint8_t parity) {
+void usart_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity) {
 
 
 	switch (BoardHardware) {
 	/*case somerevision:
-		if (uartptr->led) {
-			uartptr->led->port->OUTSET = (uartptr->led->rxled | uartptr->led->txled | uartptr->led->errled);
-			uartptr->led->port->DIRSET = (uartptr->led->rxled | uartptr->led->txled | uartptr->led->errled);
-		}
-		//chanptr->usart.led->port = &USART_LED_PORT;
-		//chanptr.usart.ledTimer = &USART_LED_TIMER;
-		//chanptr->usart.rtspin = USART_RTS_PIN_bm;
-		//chanptr.usart.rx_led_bm = USART_LED_RX_PIN_bm;
-		//chanptr.usart.tx_led_bm = USART_LED_TX_PIN_bm;
-		//chanptr.usart.er_led_bm = USART_LED_ER_PIN_bm;
-		//chanptr->usart.port->DIRSET = USART_TX_PIN_bm | USART_RTS_PIN_bm;
 		break;*/
 
+	case athwenat3100v11:
+		PORTCFG.MPCMASK = PIN5_bm;
+		PORTK.PIN0CTRL = PORT_INVEN_bm;
+		//pinctrl_setbit(&PORTK, PIN5_bm, PORT_INVEN_bm);	// Invert RTS pin
+		usartport_init(uartptr, &USARTE1, &PORTE, &PORTK, PIN7_bm, PIN6_bm, 0, PIN5_bm);
+		break;
 
 	case athwenmx3100v11:
 	default:
 #ifdef DEBUG_NOUARTTX
-		usartport_init(uartptr, &USARTE1, &PORTE, 0, PIN6_bm, 0);
+		usartport_init(uartptr, &USARTE1, &PORTE, 0, 0, PIN6_bm, 0, 0);
 #else
-		usartport_init(uartptr, &USARTE1, &PORTE, 0, PIN6_bm, PIN7_bm);
+		usartport_init(uartptr, &USARTE1, &PORTE, 0, 0, PIN6_bm, PIN7_bm, 0);
 #endif
-
 		break;
 	}
 
@@ -81,7 +83,6 @@ void usart_init(uartatstr *uartptr, uint32_t baudrate, uint8_t parity) {
 	usarthw_init(uartptr, baudrate, parity, USART_RX_BUFFER_SIZE);
 	uartptr->mcuuart->CTRLA = ((uartptr->mcuuart->CTRLA & ~USART_RXCINTLVL_gm) | USART_RXCINTLVL_LO_gc); // Enable RXC interrupt
 	UART_RX_ENABLE								// Enable receiver
-	UART_RTS_RELEASE							// Release RTS pin if defined
 }
 
 
@@ -89,23 +90,33 @@ void usart_init(uartatstr *uartptr, uint32_t baudrate, uint8_t parity) {
 /***************************************************************************
 * Initialize UART port and pins
 * [04/03/2015]
+* RTS pin control added
+* [17/08/2015]
 ***************************************************************************/
-void usartport_init(uartatstr *uartptr, USART_t *mcuuart, PORT_t *mcuport, uint8_t outputpin, uint8_t inputpin, uint8_t disabletx) {
+void usartport_init(uartatstr *uartptr, USART_t *mcuuart, PORT_t *mcuport, PORT_t *ctrlport, uint8_t outputpin, uint8_t inputpin, uint8_t disabletx, uint8_t rtspin) {
 
 	uartptr->mcuuart = mcuuart;					// MCU UART pointer
 	uartptr->port = mcuport;					// MCU UART port
 	uartptr->port->DIRSET = outputpin;			// Make pin output
 	uartptr->port->DIRCLR = inputpin;			// Make pin input
 	uartptr->disabletxpin = disabletx;			// Initialize disable Tx pin
+	if (ctrlport) {
+		uartptr->ctrlport = ctrlport;			// MCU control port
+		uartptr->rtspin = rtspin;				// RTS pin
+		UART_RTS_RELEASE						// Release RTS pin if defined
+		uartptr->ctrlport->DIRSET = rtspin;		// Make RTS pin output
+	}
 }
 
 
 /***************************************************************************
 * Initialize UART hardware settings
 * [25/02/2015]
+* Fixed: bselval changed to 16bit
+* [19/08/2015]
 ***************************************************************************/
-void usarthw_init(uartatstr *uartptr, uint32_t baudrate, uint8_t parity, uint16_t rxtxbuffsize) {
-	uint8_t 		bselvalue;
+void usarthw_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity, uint16_t rxtxbuffsize) {
+	uint16_t 		bselval;
 
 
 	uartptr->rxtxbuff.inptr = 0;
@@ -115,15 +126,15 @@ void usarthw_init(uartatstr *uartptr, uint32_t baudrate, uint8_t parity, uint16_
 
 
 	switch (parity) {
-		case 'N':
-			uartptr->mcuuart->CTRLC = USART_CHSIZE_8BIT_gc | USART_PMODE_DISABLED_gc;	// 8 Data bits, NONE Parity, 1 Stop bit
-			break;
-		case 'O':
-			uartptr->mcuuart->CTRLC = USART_CHSIZE_8BIT_gc | USART_PMODE_ODD_gc;		// 8 Data bits, ODD Parity, 1 Stop bit
-			break;
-		default:	//EVEN
-			uartptr->mcuuart->CTRLC = USART_CHSIZE_8BIT_gc | USART_PMODE_EVEN_gc;		// 8 Data bits, EVEN Parity, 1 Stop bit
-			break;
+	case 'N':
+		uartptr->mcuuart->CTRLC = USART_CHSIZE_8BIT_gc | USART_PMODE_DISABLED_gc;	// 8 Data bits, NONE Parity, 1 Stop bit
+		break;
+	case 'O':
+		uartptr->mcuuart->CTRLC = USART_CHSIZE_8BIT_gc | USART_PMODE_ODD_gc;		// 8 Data bits, ODD Parity, 1 Stop bit
+		break;
+	default:	//EVEN
+		uartptr->mcuuart->CTRLC = USART_CHSIZE_8BIT_gc | USART_PMODE_EVEN_gc;		// 8 Data bits, EVEN Parity, 1 Stop bit
+		break;
 	}
 
 	// *  	If ScaleFactor >= 0
@@ -131,8 +142,8 @@ void usarthw_init(uartatstr *uartptr, uint32_t baudrate, uint8_t parity, uint16_
 	// *  	If ScaleFactor < 0
 	// *  		BSEL = (1/(2^(ScaleFactor)*16))*(((I/O clock frequency)/Baudrate)-1)
 
-	bselvalue = (F_USART / (16 * baudrate)) - 1;
-	USART_BAUDRATE_SET(uartptr->mcuuart, bselvalue, 0);
+	bselval = (F_USART / (baudrate << 4)) - 1;
+	USART_BAUDRATE_SET(uartptr->mcuuart, bselval, 0);
 
 
 	uartptr->mcuuart->CTRLB |= USART_TXEN_bm;	// Enable transmitter

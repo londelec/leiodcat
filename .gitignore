@@ -1,1 +1,17 @@
+.gitignore
+.*
+*.o
+*.d
+*.bin
+*.eep
+*.elf
+*.hex
+*.lss
+*.map
+/Debug
+builddate.txt
+createbuilddate*
+help.txt
+_old*
+
 /Release

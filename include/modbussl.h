@@ -2,11 +2,14 @@
 ============================================================================
  Name        : Modbussl.h
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for Modbus ASCII/RTU/TCP communication protocol slave module
 
   Change log  :
+
+  *********V1.02 18/08/2015**************
+  Mapping write data pointer is 16bit pointer
 
   *********V1.01 12/06/2015**************
   New register search and count validation functions created
@@ -130,8 +133,8 @@ typedef struct Modbusmsg_ {
 
 typedef struct ModbusRegStr_ {
 	ModReg16bitDef			reg;						// Base register
-	ModReg8bitDef			*rddata;					// Read data pointer
-	ModReg8bitDef			*wrdata;					// Write data pointer
+	ModReg8bitDef			*rddata;					// Read data pointer 8bit
+	ModReg16bitDef			*wrdata;					// Write data pointer 16bit
 } ModbusRegStr;
 
 

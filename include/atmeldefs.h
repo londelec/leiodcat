@@ -2,11 +2,15 @@
  ============================================================================
  Name        : atmeldefs.h
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : Definitions header file for Atmel MCU projects
 
   Change log  :
+
+  *********V1.02 17/08/2015**************
+  New hardware enum 3100 without MX board
+  Control port added to uart structure
 
   *********V1.01 16/06/2015**************
   MCU bit set type definition created
@@ -30,6 +34,9 @@
 typedef	uint8_t						rxbytesdef;			/* recv/read/send function return size definition */
 typedef	uint32_t					TimerConstDef;		/* 32bit Timer Constant size definition */
 typedef	uint16_t					mcubitsetDef;		/* Bit set size definition */
+typedef	uint32_t					atbaudratedef;		/* Baudrate size definition */
+typedef	uint8_t						atparitydef;		/* Parity size definition */
+typedef	uint32_t					atuarttodef;		/* UART timeout size definition */
 
 
 // IO definitions
@@ -40,8 +47,9 @@ typedef	uint16_t					mcubitsetDef;		/* Bit set size definition */
 // Don't change enums, these need to match
 // bootstrap resistors on PE port to properly identify the board type
 typedef enum {
-	athwenundefined				= 0,		// Undefined hardware
-	athwenmx3100v11				= 1,		// Board with MX present IO=3100
+	athwenundefined				= 0x00,		// Undefined hardware
+	athwenmx3100v11				= 0x01,		// MX present IO=3100 PCB V1.1 V12
+	athwenat3100v11				= 0x02,		// No MX IO=3100 PCB V1.1 V1.2
 } LEOPACK athwenum;
 
 
@@ -65,6 +73,7 @@ typedef struct uartatstr_ {
 	USART_t 				*mcuuart;		// Pointer to USART module to use
 	genbuffstr 				rxtxbuff;		// RX/TX buffer structure
 	PORT_t	 				*port;			// MCU UART port
+	PORT_t	 				*ctrlport;		// MCU control port
 	uint8_t 				rtspin;			// RTS pin (0 - if not defined)
 	uint8_t 				disabletxpin;	// Disable Tx pin (while rebooting MX)
 	uint8_t 				flags;			// Runtime flags

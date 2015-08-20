@@ -2,11 +2,14 @@
  ============================================================================
  Name        : 74lv8153.c
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : LED driver module
 
   Change log  :
+
+  *********V1.01 17/08/2015**************
+  New hardware 3100 without MX board
 
   *********V1.00 25/02/2015**************
   Initial revision
@@ -34,6 +37,8 @@ ic74lv8153str	leddriver;
 /***************************************************************************
 * Initialize UART for communication to 74LV8153
 * [25/02/2015]
+* New hardware 3100 without MX board
+* [17/08/2015]
 ***************************************************************************/
 void leddrv_init() {
 	ChannelStr		*chanptr;
@@ -53,10 +58,10 @@ void leddrv_init() {
 	/*case somerevision:
 		break;*/
 
-
 	case athwenmx3100v11:
+	case athwenat3100v11:
 	default:
-		usartport_init(&chanptr->usart, &USARTC1, &PORTC, PIN7_bm, 0, 0);
+		usartport_init(&chanptr->usart, &USARTC1, &PORTC, 0, PIN7_bm, 0, 0, 0);
 		leddriver.soutpin[0] = PIN5_bm;
 		leddriver.soutpin[1] = PIN4_bm;
 		leddriver.resetpin = PIN6_bm;

@@ -2,11 +2,14 @@
 ============================================================================
  Name        : powman.h
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for power management for MX28 board
 
   Change log  :
+
+  *********V1.01 18/08/2015**************
+  Heartbeat output pin created
 
   *********V1.00 12/12/2014**************
   Initial revision
@@ -34,6 +37,8 @@
 #define	POW_T100USEC					1			// 100usec constant
 #define	POW_T1MSEC						10			// 1msec constant
 #define	POW_T1SEC						10000		// 1sec constant
+#define	POW_HBLED_ON					500			// Heartbeat LED on period 0.05sec
+#define	POW_HBLED_OFF					10000		// Heartbeat LED off timer 1sec
 // Milisecond counters
 #define	POW_VDDIO3V3_STABLE				5			// MX28 VDDIO_3V3 have to be present for this period before peripheral 3V3 is switched on (1sec)
 													// This is essential because switching on 3.3V power creates a voltage spikes which interferes with SD card read
@@ -69,7 +74,8 @@ typedef struct MXpoweecfgStr_ {
 	uint8_t					pin3v8gate;				// MCU pin to control 3V8_POWER_GATE
 	uint8_t					pin3v3gate;				// MCU pin to control 3V3_POWER_GATE
 	uint8_t					pinpowsw;				// MCU pin to control POWERON_GATE
-	uint8_t					pinhb;					// MCU pin to check MX28 heart-beat MB_SSP3_MISO
+	uint8_t					pinhbin;				// MCU input pin to check MX28 heart-beat MB_SSP3_MISO
+	uint8_t					pinhbout;				// MCU output pin that drives RUN LED for hardware configuration without MX
 	uint16_t				thadc3v2;				// ADC threshold for 3V2 detection
 } MXpoweecfgStr;
 
