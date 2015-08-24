@@ -2,11 +2,14 @@
  ============================================================================
  Name        : usart.c
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : Atmel UART module
 
   Change log  :
+
+  *********V1.02 24/08/2015**************
+  Fixed: Reset TXCIF flag before enabling TXC interrupt
 
   *********V1.01 17/08/2015**************
   Fixed: Baudrate calculation fixed by changing bselval to 16bit
@@ -318,6 +321,8 @@ void uartisr_rx(uartatstr *uartptr) {
 /***************************************************************************
 * UART transmission complete ISR
 * [18/02/2015]
+* Minor cleanup
+* [24/08/2015]
 ***************************************************************************/
 void usartisr_txcomplete(uartatstr *uartptr) {
 
@@ -328,10 +333,7 @@ void usartisr_txcomplete(uartatstr *uartptr) {
 	UART_RTS_RELEASE		// Release RTS pin if defined
 	UART_TXLED_OFF			// Turn off the TX LED if defined
 
-	uint8_t tempCTRLA = uartptr->mcuuart->CTRLA;
-	tempCTRLA = (tempCTRLA & ~USART_TXCINTLVL_gm);	// Disable TXC interrupt
-	uartptr->mcuuart->CTRLA = tempCTRLA;
-
+	uartptr->mcuuart->CTRLA &= ~USART_TXCINTLVL_gm;	// Disable TXC interrupt
 	uartptr->mcuuart->CTRLB |= USART_RXEN_bm;		// Enable Receiver
 }
 
@@ -340,6 +342,8 @@ void usartisr_txcomplete(uartatstr *uartptr) {
 * UART TX register empty ISR
 * Load next byte into TX register
 * [18/02/2015]
+* Fixed: Reset TXCIF flag before enabling TXC interrupt
+* [24/08/2015]
 ***************************************************************************/
 void usartisr_dataregempty(uartatstr *uartptr) {
 	uint8_t 		txbyte;
@@ -347,16 +351,19 @@ void usartisr_dataregempty(uartatstr *uartptr) {
 
 	if (popfifo(&uartptr->rxtxbuff) == EXIT_SUCCESS) {
 		txbyte = uartptr->rxtxbuff.fifo[uartptr->rxtxbuff.outptr];		// Get data from fifo
-		if (uartptr->rxtxbuff.inptr == uartptr->rxtxbuff.outptr) {		// Last byte to transmit, enable Tx complete interrupt
-			uint8_t tempCTRLA = uartptr->mcuuart->CTRLA;
-			tempCTRLA = (tempCTRLA & ~USART_TXCINTLVL_gm) | USART_TXCINTLVL_LO_gc;	// Enable TXC interrupt
-			uartptr->mcuuart->CTRLA = tempCTRLA;
-		}
+		//if (uartptr->rxtxbuff.inptr == uartptr->rxtxbuff.outptr) {		// Last byte to transmit, enable Tx complete interrupt
+			//uint8_t tempCTRLA = uartptr->mcuuart->CTRLA;
+			//tempCTRLA = (tempCTRLA & ~USART_TXCINTLVL_gm) | USART_TXCINTLVL_LO_gc;	// Enable TXC interrupt
+			//uartptr->mcuuart->CTRLA = tempCTRLA;
+		//}
 		uartptr->mcuuart->DATA = txbyte;	// Store byte in TX register
 	}
 	else {	// All data has been transmitted
+		uartptr->mcuuart->STATUS |= USART_TXCIF_bm;						// Reset TXC interrupt flag
+
 		uint8_t tempCTRLA = uartptr->mcuuart->CTRLA;
-		tempCTRLA = (tempCTRLA & ~USART_DREINTLVL_gm);			// Disable DRE interrupt
+		tempCTRLA &= ~(USART_DREINTLVL_gm | USART_TXCINTLVL_gm);		// Disable DRE and TXC interrupt
+		tempCTRLA |= USART_TXCINTLVL_LO_gc;								// Enable TXC interrupt
 		uartptr->mcuuart->CTRLA = tempCTRLA;
 	}
 }

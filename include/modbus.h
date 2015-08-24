@@ -2,11 +2,14 @@
 ============================================================================
  Name        : Modbus.h
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for Modbus RTU communication protocol link layer module
 
   Change log  :
+
+  *********V1.01 24/08/2015**************
+  Automatic t35 timeout calculation constant added
 
   *********V1.00 30/09/2014**************
   Initial revision
@@ -33,8 +36,8 @@
 #define	MODBUS_DEFAULT_NORESPCNT		5				// Default Master No Response counter value
 #define	MODBUS_DEFAULT_DEGRADEDRETRIES	5				// Default Master Degraded retry counter value
 #define	MODBUS_DEFAULT_DEGRADEDTIMEOUT	300				// Default Master Degraded timeout value in seconds
-#define MODBUS_RXT35					100				// Default Modbus Rx idle timer in 100usec (10ms)
-
+//#define MODBUS_RXT35					100				// Default Modbus Rx idle timer in 100usec (10ms)
+#define MODBUS_RXT35CONST				350000			// Default Modbus Rx idle timeout conversion constant in 100usecs
 
 
 

@@ -2,11 +2,15 @@
  ============================================================================
  Name        : main.c
  Author      : AK
- Version     : V1.02
+ Version     : V1.03
  Copyright   : Property of Londelec UK Ltd
  Description : LEIODC MCU main module
 
   Change log  :
+
+  *********V1.03 24/08/2015**************
+  Additional control added to ensure t35 is always greater than 1msec
+  LED driver main process moved to board.c
 
   *********V1.02 19/08/2015**************
   New hardware 3100 without MX board
@@ -110,14 +114,12 @@ const UARTBaudrateStr UARTBaudrateTable[] PROGMEM =
 
 
 
-#ifdef GLOBAL_DEBUG
-//uint16_t debugreg;
-#endif
-
 
 /***************************************************************************
 * Main function
 * [24/02/2015]
+* LED driver main process moved to board.c
+* [24/08/2015]
 ***************************************************************************/
 int main(void) {
 
@@ -136,7 +138,6 @@ int main(void) {
 		//wdt_reset();
 		if (powman_mainproc() == EXIT_SUCCESS) {		// Power manager processor, main function
 			board_mainproc();
-			leddrv_mainproc();
 			protocolrxproc();
 			protocolmainproc();
 #ifdef GLOBAL_DEBUG
@@ -165,6 +166,8 @@ int main(void) {
 * t35 timeout automatic calculation added
 * Default configuration flag created
 * [18/08/2015]
+* Additional control added to ensure t35 is always greater than 1msec
+* [24/08/2015]
 ***************************************************************************/
 void comms_init() {
 	ChannelStr			*chanptr;
@@ -262,12 +265,19 @@ void comms_init() {
 		parity = DEFAULT_PARITY;
 		chanptr->chtimeout = DEFAULT_TIMEOUT;
 		chanptr->chtxdelay = 0;
-		t35 = (350000 / baudrate);
+		t35 = (MODBUS_RXT35CONST / baudrate);
+		if (boardio.uartee.t35 < 10) {	// Ensure t35 is at least 1msec
+			boardio.uartee.t35 = 10;
+		}
 		devaddr = 1;
 	}
 	else {
-		if (boardio.uartee.t35 < (350000 / baudrate)) {	// Ensure t35 is at least 35 bits long
-			boardio.uartee.t35 = (350000 / baudrate);
+		if (boardio.uartee.t35 < 10) {	// Ensure t35 is at least 1msec
+			boardio.uartee.t35 = 10;
+			reqeeupdate = 1;
+		}
+		if (boardio.uartee.t35 < (MODBUS_RXT35CONST / baudrate)) {	// Ensure t35 is at least 35 bits long
+			boardio.uartee.t35 = (MODBUS_RXT35CONST / baudrate);
 			reqeeupdate = 1;
 		}
 		t35 = boardio.uartee.t35;

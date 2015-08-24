@@ -2,11 +2,14 @@
  ============================================================================
  Name        : 74lv8153.c
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : LED driver module
 
   Change log  :
+
+  *********V1.02 24/08/2015**************
+  Minor corrections, use shift instead of multiply
 
   *********V1.01 17/08/2015**************
   New hardware 3100 without MX board
@@ -39,6 +42,8 @@ ic74lv8153str	leddriver;
 * [25/02/2015]
 * New hardware 3100 without MX board
 * [17/08/2015]
+* Minor corrections, use shift instead of multiply
+* [24/08/2015]
 ***************************************************************************/
 void leddrv_init() {
 	ChannelStr		*chanptr;
@@ -71,7 +76,7 @@ void leddrv_init() {
 	//leddriver.leddata[0] = 0x5A;
 	//leddriver.leddata[1] = 0xFA;
 
-	usarthw_init(&chanptr->usart, 19200, 'N', (LED_DRIVER_COUNT * 2));
+	usarthw_init(&chanptr->usart, 19200, 'N', (LED_DRIVER_COUNT << 1));
 
 
 	for (cnt = 0; cnt < LED_DRIVER_COUNT; cnt++) {
@@ -174,6 +179,8 @@ void led_clear(uint8_t index) {
 /***************************************************************************
 * Update LED indication, send data to 74LV8153
 * [25/02/2015]
+* Minor corrections, use shift instead of multiply
+* [24/08/2015]
 ***************************************************************************/
 void ledupdate() {
 	uint8_t					cnt;
@@ -181,15 +188,15 @@ void ledupdate() {
 
 
 	for (cnt = 0; cnt < LED_DRIVER_COUNT; cnt++) {
-		uartptr->rxtxbuff.fifo[((cnt + 1) * 2) - 1] = ((leddriver.leddata[cnt] & 0x0F) << 4) | (cnt << 1) | 1;
-		uartptr->rxtxbuff.fifo[(cnt + 1) * 2] = (leddriver.leddata[cnt] & 0xF0) | (cnt << 1) | 1;
+		uartptr->rxtxbuff.fifo[((cnt + 1) << 1) - 1] = ((leddriver.leddata[cnt] & 0x0F) << 4) | (cnt << 1) | 1;
+		uartptr->rxtxbuff.fifo[(cnt + 1) << 1] = (leddriver.leddata[cnt] & 0xF0) | (cnt << 1) | 1;
 	}
 
 
 	leddriver.rflags &= ~LEDRF_UPDATE_LED;	// Reset update request flag
 	leddriver.ackflags = 0;					// Reset acknowledge flags
 	uartptr->rxtxbuff.outptr = 0;
-	uartptr->rxtxbuff.inptr = (LED_DRIVER_COUNT * 2);
+	uartptr->rxtxbuff.inptr = (LED_DRIVER_COUNT << 1);
 	leddriver.channel->chserstate = enumchflush;	// This state is used to ignore led update requests while data is being transmitted to 74LV8153
 	UART_ENABLE_DREIRQ		// Enable triggers the DRE interrupt immediately because TX register is empty
 }

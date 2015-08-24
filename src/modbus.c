@@ -2,11 +2,14 @@
  ============================================================================
  Name        : Modbus.c
  Author      : AK
- Version     : V1.03
+ Version     : V1.04
  Copyright   : Property of Londelec UK Ltd
  Description : Modbus RTU communication protocol link layer module
 
   Change log  :
+
+  *********V1.04 24/08/2015**************
+  Default t35 timeout initialization removed
 
   *********V1.03 16/06/2015**************
   Character multiplier is no longer passed to application layer
@@ -154,6 +157,8 @@ void Modbussl_preinit(GenProtocolStr *genprotocol, DevAddrDef devaddr) {
 /***************************************************************************
 * Initialize Shared link layer structure
 * [30/09/2014]
+* Default t35 timeout initialization removed
+* [24/08/2015]
 ***************************************************************************/
 Modbus_shared_linklayer *Modbus_initshared(StatStr *currentsta) {
 	//StatStr	 				*staptr;
@@ -189,7 +194,6 @@ Modbus_shared_linklayer *Modbus_initshared(StatStr *currentsta) {
 	// Existing shared structure is not found, initialize
 	sharedlink = calloc(1, sizeof(Modbus_shared_linklayer));
 	sharedlink->rxbuff = calloc(MODBUS_RXBUFF_SIZE, sizeof(uint8_t));
-	sharedlink->rxtimeout35 = MODBUS_RXT35;
 	return sharedlink;
 }
 

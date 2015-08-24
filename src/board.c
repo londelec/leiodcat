@@ -2,11 +2,14 @@
  ============================================================================
  Name        : board.c
  Author      : AK
- Version     : V1.02
+ Version     : V1.03
  Copyright   : Property of Londelec UK Ltd
  Description : board hardware module
 
   Change log  :
+
+  *********V1.03 24/08/2015**************
+  LED driver main process moved from main.c
 
   *********V1.02 17/08/2015**************
   New hardware 3100 without MX board
@@ -51,6 +54,7 @@ float		caltempfloat;		// Temperature calibration float value, for scaled tempera
 
 #ifdef GLOBAL_DEBUG
 //#define DEBUG_NOEE
+//#define DEBUG_NOLEDDRV
 #endif	// GLOBAL_DEBUG
 
 
@@ -151,7 +155,9 @@ void board_init() {
 			(MODBUS_DOMULT * boardhw.docount) + 1;
 
 
+#ifndef DEBUG_NOLEDDRV
 	leddrv_init();
+#endif // DEBUG_NOLEDDRV
 
 
 	LED_CONTROL_PIN_ON			// Activate LED CONTROL (OE) pin
@@ -299,6 +305,8 @@ void initboardDO(uint8_t docount, uint8_t baseoffset) {
 * [25/02/2015]
 * DI and DO mode enums now defined in modbusdef.h
 * [19/08/2015]
+* LED driver main process moved from main.c
+* [24/08/2015]
 ***************************************************************************/
 void board_mainproc() {
 	uint8_t				cnt;
@@ -357,6 +365,9 @@ void board_mainproc() {
 		}
 	}
 	calctemperature();
+#ifndef DEBUG_NOLEDDRV
+	leddrv_mainproc();
+#endif	// DEBUG_NOLEDDRV
 }
 
 
