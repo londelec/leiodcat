@@ -2,11 +2,15 @@
  ============================================================================
  Name        : usart.c
  Author      : AK
- Version     : V1.02
+ Version     : V1.03
  Copyright   : Property of Londelec UK Ltd
  Description : Atmel UART module
 
-  Change log  :
+  Change log :
+
+  *********V1.03 09/04/2016**************
+  Fixed: Must enable TXC interrupt when loading last byte
+  Interrupt levels defined in irq.h now
 
   *********V1.02 24/08/2015**************
   Fixed: Reset TXCIF flag before enabling TXC interrupt
@@ -57,6 +61,8 @@
 * New hardware 3100 without MX board
 * RTS pin control added
 * [20/08/2015]
+* Rx interrupt level defined in irq.h now
+* [09/04/2016]
 ***************************************************************************/
 void usart_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity) {
 
@@ -84,8 +90,8 @@ void usart_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity) 
 
 
 	usarthw_init(uartptr, baudrate, parity, USART_RX_BUFFER_SIZE);
-	uartptr->mcuuart->CTRLA = ((uartptr->mcuuart->CTRLA & ~USART_RXCINTLVL_gm) | USART_RXCINTLVL_LO_gc); // Enable RXC interrupt
-	UART_RX_ENABLE								// Enable receiver
+	uartptr->mcuuart->CTRLA = ((uartptr->mcuuart->CTRLA & ~USART_RXCINTLVL_gm) | USART_RXCINTLVL); // Enable RXC interrupt
+	UART_RX_ENABLE	// Enable receiver
 }
 
 
@@ -95,6 +101,8 @@ void usart_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity) 
 * [04/03/2015]
 * RTS pin control added
 * [17/08/2015]
+* Set no receive flag is input pin is not defined
+* [08/04/2016]
 ***************************************************************************/
 void usartport_init(uartatstr *uartptr, USART_t *mcuuart, PORT_t *mcuport, PORT_t *ctrlport, uint8_t outputpin, uint8_t inputpin, uint8_t disabletx, uint8_t rtspin) {
 
@@ -103,12 +111,16 @@ void usartport_init(uartatstr *uartptr, USART_t *mcuuart, PORT_t *mcuport, PORT_
 	uartptr->port->DIRSET = outputpin;			// Make pin output
 	uartptr->port->DIRCLR = inputpin;			// Make pin input
 	uartptr->disabletxpin = disabletx;			// Initialize disable Tx pin
+
 	if (ctrlport) {
 		uartptr->ctrlport = ctrlport;			// MCU control port
 		uartptr->rtspin = rtspin;				// RTS pin
 		UART_RTS_RELEASE						// Release RTS pin if defined
 		uartptr->ctrlport->DIRSET = rtspin;		// Make RTS pin output
 	}
+
+	if (!inputpin)
+		uartptr->flags |= UARTRTF_NORX;			// This UART doesn't receive
 }
 
 
@@ -220,7 +232,7 @@ uint8_t checkrx(uartatstr *uartptr) {
 
 
 /***************************************************************************
-* Allocate space in the EVENT buffer for next entry
+* Allocate space in the buffer for next byte
 * [18/02/2015]
 ***************************************************************************/
 uint8_t pushfifo(genbuffstr *buffer, uint8_t discardold) {
@@ -323,6 +335,8 @@ void uartisr_rx(uartatstr *uartptr) {
 * [18/02/2015]
 * Minor cleanup
 * [24/08/2015]
+* Enable receiver only if UART is supposed to receive
+* [08/04/2016]
 ***************************************************************************/
 void usartisr_txcomplete(uartatstr *uartptr) {
 
@@ -334,7 +348,9 @@ void usartisr_txcomplete(uartatstr *uartptr) {
 	UART_TXLED_OFF			// Turn off the TX LED if defined
 
 	uartptr->mcuuart->CTRLA &= ~USART_TXCINTLVL_gm;	// Disable TXC interrupt
-	uartptr->mcuuart->CTRLB |= USART_RXEN_bm;		// Enable Receiver
+
+	if (!(uartptr->flags & UARTRTF_NORX))
+		uartptr->mcuuart->CTRLB |= USART_RXEN_bm;	// Enable Receiver
 }
 
 
@@ -344,6 +360,12 @@ void usartisr_txcomplete(uartatstr *uartptr) {
 * [18/02/2015]
 * Fixed: Reset TXCIF flag before enabling TXC interrupt
 * [24/08/2015]
+* Fixed: Must enable TXC interrupt when loading last byte
+* The problem occurred when TXC and DRE interrupts happened at the same time.
+* DRE being higher priority was serviced first and it cleared TXCIF status bit.
+* After returning from DRE, TXCIF bit was no longer set which lead to TXC interrupt
+* never being serviced.
+* [09/04/2016]
 ***************************************************************************/
 void usartisr_dataregempty(uartatstr *uartptr) {
 	uint8_t 		txbyte;
@@ -351,20 +373,18 @@ void usartisr_dataregempty(uartatstr *uartptr) {
 
 	if (popfifo(&uartptr->rxtxbuff) == EXIT_SUCCESS) {
 		txbyte = uartptr->rxtxbuff.fifo[uartptr->rxtxbuff.outptr];		// Get data from fifo
-		//if (uartptr->rxtxbuff.inptr == uartptr->rxtxbuff.outptr) {		// Last byte to transmit, enable Tx complete interrupt
-			//uint8_t tempCTRLA = uartptr->mcuuart->CTRLA;
-			//tempCTRLA = (tempCTRLA & ~USART_TXCINTLVL_gm) | USART_TXCINTLVL_LO_gc;	// Enable TXC interrupt
-			//uartptr->mcuuart->CTRLA = tempCTRLA;
-		//}
-		uartptr->mcuuart->DATA = txbyte;	// Store byte in TX register
+
+		uartptr->mcuuart->DATA = txbyte;	// We must store byte in TX register before enabling TXC interrupt
+
+		if (uartptr->rxtxbuff.inptr == uartptr->rxtxbuff.outptr) {		// Last byte to transmit, enable Tx complete interrupt
+			uartptr->mcuuart->STATUS |= USART_TXCIF_bm;					// Reset TXC interrupt flag
+			uint8_t tempCTRLA = uartptr->mcuuart->CTRLA;
+			tempCTRLA = (tempCTRLA & ~USART_TXCINTLVL_gm) | USART_TXCINTLVL;	// Enable TXC interrupt
+			uartptr->mcuuart->CTRLA = tempCTRLA;
+		}
 	}
 	else {	// All data has been transmitted
-		uartptr->mcuuart->STATUS |= USART_TXCIF_bm;						// Reset TXC interrupt flag
-
-		uint8_t tempCTRLA = uartptr->mcuuart->CTRLA;
-		tempCTRLA &= ~(USART_DREINTLVL_gm | USART_TXCINTLVL_gm);		// Disable DRE and TXC interrupt
-		tempCTRLA |= USART_TXCINTLVL_LO_gc;								// Enable TXC interrupt
-		uartptr->mcuuart->CTRLA = tempCTRLA;
+		uartptr->mcuuart->CTRLA &= ~USART_DREINTLVL_gm;		// Disable DRE interrupt
 	}
 }
 
@@ -372,6 +392,8 @@ void usartisr_dataregempty(uartatstr *uartptr) {
 /***************************************************************************
 * USART interrupts
 * [25/02/2015]
+* Return if irq number is not recognized
+* [08/04/2016]
 ***************************************************************************/
 ISR(UART_GENERIC_IRQ_VECTOR) {
 	ChannelStr		*chanptr;
@@ -391,8 +413,8 @@ ISR(UART_GENERIC_IRQ_VECTOR) {
 		requart = &USARTE1;
 		break;
 
-	default:
-		break;
+	default:	// Unknown irq number
+		return;
 	}
 
 
@@ -419,6 +441,7 @@ ISR(UART_GENERIC_IRQ_VECTOR) {
 			default:
 				break;
 			}
+			break;	// UART found and processed
 		}
 	}
 }

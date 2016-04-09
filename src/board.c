@@ -55,6 +55,7 @@ float		caltempfloat;		// Temperature calibration float value, for scaled tempera
 #ifdef GLOBAL_DEBUG
 //#define DEBUG_NOEE
 //#define DEBUG_NOLEDDRV
+//#define DEBUG_LEDUPDATE
 #endif	// GLOBAL_DEBUG
 
 
@@ -344,6 +345,9 @@ void board_mainproc() {
 
 	// TODO add timer and disable LED OE pin when expired and
 	// if there were no indication changes
+#ifdef DEBUG_LEDUPDATE
+	boardio.rflags |= BOARDRF_UPDATE_LED;
+#endif
 	if (boardio.rflags & BOARDRF_UPDATE_LED) {		// Update LEDs if flag is set
 		boardio.rflags &= ~BOARDRF_UPDATE_LED;		// Must be immediately AFTER check, due to interrupt awareness
 		ledregclear();

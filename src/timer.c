@@ -2,11 +2,14 @@
  ============================================================================
  Name        : timer.c
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : Atmel timer management module
 
-  Change log  :
+  Change log :
+
+  *********V1.01 09/04/2016**************
+  Interrupt levels defined in irq.h now
 
   *********V1.00 19/02/2015**************
   Initial revision
@@ -18,13 +21,14 @@
 #include <avr/interrupt.h>
 
 #include "timer.h"
+#include "irq.h"
 
 
 finetmstr FineTimer;
 
 
-#define FINETIMER_ENABLE_IRQ	FINETIMER_MCUTMR.INTCTRLA = TC0_OVFINTLVL0_bm;			// Enable interrupt
-#define FINETIMER_DISABLE_IRQ	FINETIMER_MCUTMR.INTCTRLA = 0;							// Disable interrupt
+#define FINETIMER_ENABLE_IRQ	FINETIMER_MCUTMR.INTCTRLA = FINETIMER_INTLVL;	// Enable interrupt
+#define FINETIMER_DISABLE_IRQ	FINETIMER_MCUTMR.INTCTRLA = 0;					// Disable interrupt
 
 
 /***************************************************************************
@@ -58,12 +62,14 @@ void clock_init() {
 /***************************************************************************
 * Initialize timers
 * [19/02/2015]
+* Timer interrupt levels defined in irq.h now
+* [09/04/2016]
 ***************************************************************************/
 void timer_init() {
 
 //1ms tick
 	TIMER1MS_MCUTMR.PER = TIMERPER_1MSEC;
-	TIMER1MS_MCUTMR.INTCTRLA = (TIMER1MS_MCUTMR.INTCTRLA & ~TC1_OVFINTLVL_gm) | TC1_OVFINTLVL0_bm;
+	TIMER1MS_MCUTMR.INTCTRLA = (TIMER1MS_MCUTMR.INTCTRLA & ~TC1_OVFINTLVL_gm) | TIMER1MS_INTLVL;
 	TIMER1MS_MCUTMR.CTRLA = (TIMER1MS_MCUTMR.CTRLA & ~TC1_CLKSEL_gm) | TC_CLKSEL_DIV1_gc;	//enable
 
 //timer for debug

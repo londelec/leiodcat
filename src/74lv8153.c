@@ -2,11 +2,14 @@
  ============================================================================
  Name        : 74lv8153.c
  Author      : AK
- Version     : V1.02
+ Version     : V1.03
  Copyright   : Property of Londelec UK Ltd
  Description : LED driver module
 
-  Change log  :
+  Change log :
+
+  *********V1.03 09/04/2016**************
+  Interrupt levels defined in irq.h now
 
   *********V1.02 24/08/2015**************
   Minor corrections, use shift instead of multiply
@@ -44,6 +47,8 @@ ic74lv8153str	leddriver;
 * [17/08/2015]
 * Minor corrections, use shift instead of multiply
 * [24/08/2015]
+* SOUT pin interrupt level defined in irq.h now
+* [09/04/2016]
 ***************************************************************************/
 void leddrv_init() {
 	ChannelStr		*chanptr;
@@ -85,10 +90,10 @@ void leddrv_init() {
 	chanptr->usart.port->OUTCLR = soutpinmask;			// Clear all SOUT pins
 	chanptr->usart.port->DIRCLR = soutpinmask;			// SOUT pins are inputs
 	PORTCFG.MPCMASK = soutpinmask;						// Apply new configuration to SOUT pins
-	chanptr->usart.port->PIN0CTRL |= PORT_ISC_FALLING_gc;	// Falling edge interrupt
+	chanptr->usart.port->PIN0CTRL = PORT_ISC_FALLING_gc;	// Falling edge interrupt
 
 	chanptr->usart.port->INT1MASK = soutpinmask;		// Enable SOUT pin interrupts
-	chanptr->usart.port->INTCTRL = (chanptr->usart.port->INTCTRL & ~PORT_INT1LVL_gm) | PORT_INT1LVL_LO_gc;	// Enable port interrupt
+	chanptr->usart.port->INTCTRL = (chanptr->usart.port->INTCTRL & ~PORT_INT1LVL_gm) | LEDSOUT_INTLVL;	// Enable port interrupt
 
 	LEDDRV_RESET_ACTIVATE								// Clear RESET pin
 	chanptr->usart.port->DIRSET = leddriver.resetpin;	// RESET pin is output

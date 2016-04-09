@@ -2,11 +2,16 @@
  ============================================================================
  Name        : ledefs.h
  Author      : AK
- Version     : V1.08
+ Version     : V1.09
  Copyright   : Property of Londelec UK Ltd
  Description : Global header file for Londelec C/C++ projects
 
-  Change log  :
+  Change log :
+
+  *********V1.09 04/10/2015**************
+  lseek offset definition added
+  lefloat definition added
+  aligned attribute added
 
   *********V1.08 22/06/2015**************
   Londelec Unix second definition added
@@ -67,7 +72,8 @@
 
 // Generic definitions
 #define	HOURINSEC						3600			// Hour in seconds
-//#define	DAYINSEC						86400			// Day in seconds
+#define	MININSEC						60				// Minute in seconds
+#define	DAYINSEC						86400			// Day in seconds
 #define SECINNSEC						1000000000		// Second in nanoseconds
 #define MSECINNSEC						1000000			// Milisecond in nanoseconds
 
@@ -80,7 +86,8 @@
 #else
 #define LEOPACK						__attribute__ ((packed))	// Pack in order to save memory, optional
 #endif // MOXA W3X5A
-#define LEWEAK						__attribute__((weak))		// Function initialized as weak, normally replaced by driver
+#define LEALIGN32					__attribute__ ((aligned (4)))	// Minimum alignment 4 bytes
+#define LEWEAK						__attribute__ ((weak))			// Function initialized as weak, normally replaced by driver
 #define LELIBCONSTRUCTOR			__attribute__ ((constructor))	// Library initialization constructor, executed before library loads
 
 
@@ -108,11 +115,12 @@ typedef struct sockaddr_un 			sockunixaddrdef;	/* Socket Unix address definition
 typedef struct in_addr				inaddrdef;			/* Internet IPv4 address definition */
 typedef	struct if_nameindex			ifnameixdef;		/* Interface name index definition */
 typedef	struct ifreq				ifreqdef;			/* Interface IO parameters definition */
+typedef	unsigned int				ifixdef;			/* Interface index size definition */
 typedef	int							fddef;				/* File descriptor size definition */
 typedef	int							errnodef;			/* Error Number definition */
 typedef	char						lechar;				/* Character size definition */
 typedef	uintptr_t					leptr;				/* Pointer size definition */
-typedef	struct stat 				filestatdef;		/* file status structure definition */
+typedef	float						lefloat;			/* Short floating point size definition */
 typedef	struct timeval				unixtimedef;		/* Unix time (sec and microsecs) structure definition */
 #ifndef MCUTYPE
 typedef	ssize_t						rxbytesdef;			/* recv/read/send function return size definition */
@@ -125,6 +133,10 @@ typedef __time_t					leunixsec;			/* Unix second definition */
 typedef uint32_t					leepochsec;			/* Londelec defined 32bit unsigned seconds since epoch */
 typedef uint64_t					leepoch64sec;		/* Londelec defined 64bit seconds since epoch */
 typedef uint16_t					lemsecdef;			/* Milisecond size definition */
+typedef __off_t						leofft;				/* lseek offset size definition */
+typedef	struct stat 				filestatdef;		/* file status structure definition */
+typedef	struct statvfs				vfsstatdef;			/* Virtual file system status structure definition */
+typedef	struct pcap_pkthdr			pcaphdrdef;			/* pcap header structure definition */
 #endif	// MCUTYPE
 
 
@@ -145,6 +157,12 @@ typedef	uint16_t					leflags16bit;		/* Internal flag size definition */
 #define STRINGIFY(s)				STRINGIFY_(s)
 #define ARRAY_SIZE(x)				(sizeof(x) / sizeof((x)[0]))
 #define BOOL_CHECK(b)				(b ? 1 : 0)
+
+#define BYTE_ISNUM(mbyte) 			(((mbyte) >= 0x30) && ((mbyte) <= 0x39))
+// Convert ASCII to decimal
+#define ASCIIDEC_MACRO(mdec, mascii)\
+		mdec *= 10;\
+		mdec += (mascii & 0x0F);
 
 
 /*// Macros for expanding the date string

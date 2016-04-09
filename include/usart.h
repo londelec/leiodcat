@@ -2,11 +2,14 @@
  ============================================================================
  Name        : usart.h
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for Atmel UART
 
-  Change log  :
+  Change log :
+
+  *********V1.02 09/04/2016**************
+  Interrupt levels defined in irq.h now
 
   *********V1.01 18/08/2015**************
   RTS pin added to initialization function
@@ -22,6 +25,7 @@
 #define USART_H_
 
 #include "ledefs.h"
+#include "irq.h"
 #include "main.h"
 
 
@@ -37,7 +41,8 @@
 //#define USART_FRAME35_TIMER_50US_TICKS		((F_TIMER/8) / 1000000) * 50 //115.2 ticks = 50us
 
 // UART buffer flags
-#define UARTRTF_BUFFOVFL				0x01
+#define UARTRTF_BUFFOVFL				0x01			// Receive buffer overflow
+#define UARTRTF_NORX					0x02			// UART doesn't receive (for 74lv8153 communication)
 
 
 // UART default settings
@@ -81,7 +86,7 @@
 // Enable DRE interrupt
 #define UART_ENABLE_DREIRQ\
 	uint8_t tempCTRLA = uartptr->mcuuart->CTRLA;\
-	tempCTRLA = (tempCTRLA & ~USART_DREINTLVL_gm) | USART_DREINTLVL_LO_gc;\
+	tempCTRLA = (tempCTRLA & ~USART_DREINTLVL_gm) | USART_DREINTLVL;\
 	uartptr->mcuuart->CTRLA = tempCTRLA;
 
 

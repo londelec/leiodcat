@@ -2,11 +2,14 @@
  ============================================================================
  Name        : powman.c
  Author      : AK
- Version     : V1.02
+ Version     : V1.03
  Copyright   : Property of Londelec UK Ltd
  Description : Power management for MX28 board
 
-  Change log  :
+  Change log :
+
+  *********V1.03 09/04/2016**************
+  Interrupt levels defined in irq.h now
 
   *********V1.02 17/08/2015**************
   New hardware 3100 without MX board
@@ -33,14 +36,15 @@
 #include "ledefs.h"
 #include "main.h"
 #include "powman.h"
+#include "irq.h"
 #include "mcueecfg.h"
 #include "board.h"
 
 
 #ifdef GLOBAL_DEBUG
-//#define DEBUG_IGNORE_VDDIO
+#define DEBUG_IGNORE_VDDIO
 #define DEBUG_NOIDLECNT
-//#define DEBUG_IGNORE_HBHIGH
+#define DEBUG_IGNORE_HBHIGH
 #endif	// GLOBAL_DEBUG
 
 
@@ -69,6 +73,8 @@ MXpowStr MXpower;
 * New hardware 3100 without MX board
 * Heartbeat output pin created
 * [19/08/2015]
+* Heartbeat pin interrupt level defined in irq.h now
+* [09/04/2016]
 ***************************************************************************/
 void powman_init() {
 	uint32_t			eedword;
@@ -156,7 +162,7 @@ void powman_init() {
 			}
 		}*/
 		boardio.ctrlport->INT1MASK = MXpower.cfg.pinhbin;	// Enable heartbeat pin interrupt
-		boardio.ctrlport->INTCTRL = (boardio.ctrlport->INTCTRL & ~PORT_INT1LVL_gm) | PORT_INT1LVL_LO_gc;	// Enable port interrupt
+		boardio.ctrlport->INTCTRL = (boardio.ctrlport->INTCTRL & ~PORT_INT1LVL_gm) | POWMANHB_INTLVL;	// Enable port interrupt
 	}
 }
 

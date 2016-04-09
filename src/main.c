@@ -6,7 +6,7 @@
  Copyright   : Property of Londelec UK Ltd
  Description : LEIODC MCU main module
 
-  Change log  :
+  Change log :
 
   *********V1.03 24/08/2015**************
   Additional control added to ensure t35 is always greater than 1msec
@@ -54,7 +54,7 @@
 
 
 #define	FWVERSION_MAJOR			1			// Firmware version number major
-#define	FWVERSION_MINOR			3			// Firmware version number minor
+#define	FWVERSION_MINOR			4			// Firmware version number minor
 #if FWVERSION_MINOR < 10
 #define	FWVERSION_10TH_ZERO		"0"
 #else
