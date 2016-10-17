@@ -2,11 +2,15 @@
 ============================================================================
  Name        : board.h
  Author      : AK
- Version     : V1.02
+ Version     : V1.03
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for board hardware module
 
-  Change log  :
+  Change log :
+
+  *********V1.03 08/09/2016**************
+  UART interface type added
+  Local function prototypes removed
 
   *********V1.02 18/08/2015**************
   Default configuration pin and flag created
@@ -32,21 +36,7 @@
 #include "ledefs.h"
 #include "atmeldefs.h"
 #include "modbusdef.h"
-
-
-
-
-// IO definitions
-#define DI_DEFAULT_FILTER_MSEC		50 		// default 50ms
-#define DO_DEFAULT_HOLD_MSEC		1500 	// default 1.5sec
-//#define DO_HOLD_TIME_MIN			500
-//#define DO_HOLD_TIME_MAX			5000
-
-#define VPORT_BASE 					VPORT0
-
-// Automatic hardware identification constants
-#define BOARD_AUTOID_MCUPORT		PORTE	// MCU port where hardware identification resistors are
-#define BOARD_AUTOID_MASK			0x3F	// Mask pins which are not used for ID resistors
+#include "leiodcat.h"
 
 
 // ADC and channels
@@ -91,7 +81,7 @@ typedef struct boardDOstr_ {
 
 
 typedef struct boarduarteestr_ {
-	uint16_t 				brenum;						// Baudrate enum
+	uint16_t 				bren16;						// Baudrate enum 16bit
 	uint16_t				timeoutl;					// Timeout lowword ! Don't swap these, this will break EEPROM layout
 	uint16_t				timeouth;					// Timeout highword ! Don't swap these, this will break EEPROM layout
 	uint16_t				txdelayl;					// Tx delay lowword ! Don't swap these, this will break EEPROM layout
@@ -99,48 +89,35 @@ typedef struct boarduarteestr_ {
 	uint16_t				t35;						// t35 timeout
 	uint16_t				parity;						// Parity
 	uint16_t 				devaddr;					// Device address
+	uint16_t 				uartif;						// UART interface
 } boarduarteestr;
 
 
 typedef struct boardstr_ {
-	uint8_t					rflags;						// Runtime flags
-	boardDIstr				*diptr;						// DI structure pointer, initialized of board has DIs
-	boardDOstr				*doptr;						// DO structure pointer, initialized of board has DOs
-	uint8_t					ledoepin;					// Output enable (OE) pin of 74LV541
-	uint8_t					defcfgpin;					// Default configuration pin
+	float 					caltempf;					// Temperature calibration float value, for scaled temperature calculation
+	boardDIstr				*diptr;						// DI structure pointer, initialized if board has DIs
+	boardDOstr				*doptr;						// DO structure pointer, initialized if board has DOs
 	PORT_t					*ctrlport;					// MCU control port
 	uint16_t				mapsize;					// Actual count of modbus mapped registers
 	mcubitsetDef			eeupdatebs;					// EEPROM configuration update bit set
 	mcubitsetDef			eerdmask;					// EEPROM read masks (bit set)
 	mcubitsetDef			eewrmask;					// EEPROM write masks (bit set)
-	boarduarteestr	 		uartee;						// Pointer to main UART
+	uint16_t 				tempscaled; 				// Temperature value, scaled
+	uint16_t 				caltemp85;					// Temperature calibration value from NVM
+	uint16_t 				resetreg;					// Software reset register
+	boarduarteestr	 		uartee;						// Main UART configuration
+	uint8_t					rflags;						// Runtime flags
+	uint8_t					ledoepin;					// Output enable (OE) pin of 74LV541
+	uint8_t					defcfgpin;					// Default configuration pin
 } boardstr;
 
 
-typedef struct boardhwtablestr_  {
-	athwenum				type;
-	uint8_t					dicount;
-	uint8_t					docount;
-	uint8_t					dioffs;
-	uint8_t					dooffs;
-} boardhwtablestr;
+extern boardstr boardio;
 
 
-extern boardstr	boardio;
-extern uint16_t	caltemp85;
-extern uint16_t	tempscaled;
+void boardisr_1ms(void);
+void board_mainproc(void);
+void board_init(void);
 
-
-void board_init();
-void initboardDI(uint8_t dicount, uint8_t baseoffset);
-void initboardDO(uint8_t docount, uint8_t baseoffset);
-void board_mainproc();
-uint8_t checkotherdoactive(boardDOstr *doptr, uint8_t doindex);
-void activateDO(boardDOstr *doptr, uint8_t doindex);
-void releaseDO(boardDOstr *doptr, uint8_t doindex);
-void calctemperature();
-void getboardhw(boardhwtablestr *hwptr);
-
-void boardisr_1ms();
 
 #endif /* BOARD_H_ */

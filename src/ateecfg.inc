@@ -2,11 +2,14 @@
 ============================================================================
  Name        : ateecfg.inc
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : Include file for Atmel EEPROM configuraiton
 
-  Change log  :
+  Change log :
+
+  *********V1.02 08/09/2016**************
+  All configurable entries removed, only 16byte header left
 
   *********V1.01 12/06/2015**************
   DI modes added
@@ -23,11 +26,11 @@
 
 struct mcueecfgstr {									// Set the size of configration
 	mcueeheader				eeheader;					// Configuration header, fixed length = 16bytes
-	mcueegrphead			uart0_head;					// UART group head
-	eeuartbaudrate			uart0_baudrate;				// UART baudrate structure		
-	eeuartparity			uart0_parity;				// UART parity structure
-	eeuarttxdelay			uart0_txdelay;				// UART tx delay structure
-	eeuartaddress			uart0_address;				// UART device address
+	//mcueegrphead			uart0_head;					// UART group head
+	//eeuartbaudrate			uart0_baudrate;				// UART baudrate structure		
+	//eeuartparity			uart0_parity;				// UART parity structure
+	//eeuarttxdelay			uart0_txdelay;				// UART tx delay structure
+	//eeuartaddress			uart0_address;				// UART device address
 	//mcueegrphead			powman_head;				// Power manager group head
 	//eepowmanthadc3v2		powman_thadc3v2;			// ADC threshold for 3.2V detection
 	//mcueegrphead			board_head;					// Board settings group head
@@ -43,12 +46,12 @@ struct mcueecfgstr EEMEM eepromcfg = {					// Initialize configuration data
 		.eeheader.revminor = 1,
 		.eeheader.size = sizeof(struct mcueecfgstr),
 
-		.uart0_head.id = eegren_uart0,
-		.uart0_head.size = (((uint16_t) &eepromcfg.uart0_address) - ((uint16_t) &eepromcfg.uart0_head) - sizeof(mcueegrphead) + sizeof(eepromcfg.uart0_address)),
-		.EEDATA_ENTER(uart0_baudrate, uart, baudrate, atbr115200)
-		.EEDATA_ENTER(uart0_parity, uart, parity, 'E')
-		.EEDATA_ENTER(uart0_txdelay, uart, txdelay, 500)
-		.EEDATA_ENTER(uart0_address, uart, address, 1)
+		//.uart0_head.id = eegren_uart0,
+		//.uart0_head.size = (((uint16_t) &eepromcfg.uart0_address) - ((uint16_t) &eepromcfg.uart0_head) - sizeof(mcueegrphead) + sizeof(eepromcfg.uart0_address)),
+		//.EEDATA_ENTER(uart0_baudrate, uart, baudrate, atbr115200)
+		//.EEDATA_ENTER(uart0_parity, uart, parity, 'E')
+		//.EEDATA_ENTER(uart0_txdelay, uart, txdelay, 500)
+		//.EEDATA_ENTER(uart0_address, uart, address, 1)
 
 		//.powman_head.id = eegren_powman,
 		//.powman_head.size = sizeof(eepowmanthadc3v2),

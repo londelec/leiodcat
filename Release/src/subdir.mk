@@ -6,7 +6,7 @@
 C_SRCS += \
 ../src/74lv8153.c \
 ../src/board.c \
-../src/main.c \
+../src/leiodcat.c \
 ../src/mcueecfg.c \
 ../src/modbus.c \
 ../src/modbussl.c \
@@ -21,7 +21,7 @@ OBJS += \
 ./src/74lv8153.o \
 ./src/board.o \
 ./src/irqproc.o \
-./src/main.o \
+./src/leiodcat.o \
 ./src/mcueecfg.o \
 ./src/modbus.o \
 ./src/modbussl.o \
@@ -32,7 +32,7 @@ OBJS += \
 C_DEPS += \
 ./src/74lv8153.d \
 ./src/board.d \
-./src/main.d \
+./src/leiodcat.d \
 ./src/mcueecfg.d \
 ./src/modbus.d \
 ./src/modbussl.d \

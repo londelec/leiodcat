@@ -1,12 +1,17 @@
 /*
  ============================================================================
- Name        : main.h
+ Name        : leiodcat.h
  Author      : AK
- Version     : V1.02
+ Version     : V2.00
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for LEIODC MCU main module
 
-  Change log  :
+  Change log :
+
+  *********V2.00 07/09/2016**************
+  Local function prototypes moved to leiodcat.c
+  MCU port and pin definitions added
+  Renamed to leiodcat.h
 
   *********V1.02 18/08/2015**************
   Modbus mapping created for UART settings
@@ -41,7 +46,31 @@
 #define MULT10USEC						100000			// Multiplier to convert from sec to 10usec
 #define MAINSLEEP						100000			// Main loop sleep in nanoseconds, default 0.1ms
 #define MIN_TIMESYNC_INTERVAL			3600			// Minimal System time synchronization interval in seconds
-#define SYS_REBOOT_DELAY				2				// System reboot delay in seconds
+
+
+// MCU ports
+#define MCUP_LED						PORTC			// LED driver
+#define MCUP_IFACE						PORTD			// IO module RS232/285/422 interface selection
+#define MCUP_UART						PORTE			// UART Rx and Tx pins
+#define MCUP_AUTOID						PORTE			// Hardware identification resistors
+#define MCUP_IOL						PORTF			// IO port [0..7]
+#define MCUP_IOH						PORTH			// IO port [8..16]
+#define MCUP_CTRL						PORTK			// UART RTS pin
+#define MCUP_MXAUTOID					PORTK			// MX board hardware identification
+
+// MCU pins and masks
+#define PIN_TXD							PIN7_bm			// UART TxD pin
+#define PIN_LEDTX						PIN7_bm			// LED TxD pin
+#define PIN_RXD							PIN6_bm			// UART RxD pin
+#define PIN_MXAUTOID					PIN5_bm			// Pin to identify MX board presence
+#define PIN_RTS							PIN5_bm			// UART RTS pin
+#define MASK_AUTOID						ATHW_ID_MASK	// Select pins used for ID resistors
+#define MASK_UIFACE						0xE0			// Select pins used for RS232/285/422 interface selection
+
+
+// Reset register values
+#define RESETREG_PLACEHOLDER			0x5500 			// Constant for reset register highbyte
+#define RESETREG_RESET					0xaaaa 			// Reset value
 
 
 // Channel runtime flags (->chflags)
@@ -62,9 +91,9 @@
 #define STARGDEF_ONLINECHECK StatStr *staptr
 
 // Protocol driver function arguments
-#define DRVARGDEF_MAINPROC StatStr *staptr, uint8_t **txbuffptr, TxRx16bitDef *txlength
+#define DRVARGDEF_MAINPROC  struct StatStr_ *staptr, uint8_t **txbuffptr, TxRx16bitDef *txlength
 #define DRVARGDEF_CHINIT ChannelStr *chanptr, StatStr *staptr
-#define DRVARGDEF_RX StatStr *staptr
+#define DRVARGDEF_RX struct StatStr_ *staptr
 #define DRVARGDEF_COMMSERR StatStr *staptr, uint8_t istimeout, uint8_t sockclosed
 #define DRVARGDEF_REDUNINIT StatStr *staptr
 
@@ -85,16 +114,6 @@
 #define MAINF_SET_10USEC(mtconst, mtimer) timerset_fine(mtconst, mtimer);
 #define MAINF_CHECK_CHTIMER timercheck_fine(&chanptr->chtimer)
 #define MAINF_CHECK_CHCHARTIMER timercheck_fine(&chanptr->chchartimer)
-
-
-
-
-#define STCOMMSERR_CBSET_INIT\
-		StastatecbStr			cbset[enumstacbcount];\
-		uint8_t					cnt;\
-		for (cnt = 0; cnt < enumstacbcount; cnt++) {\
-			cbset[cnt].cb = NULL;\
-		}
 
 
 
@@ -127,8 +146,6 @@ typedef enum {
 } LEOPACK CHSerStateEnum;
 
 
-
-
 // Modbus register addresses enums
 // Don't forget to update constant definitions
 // when adding new enums
@@ -139,6 +156,7 @@ typedef enum {
 	atmapen_tempcal85,								// Temperature calibration value at 85 degrees
 	atmapen_vddio,									// VDDIO voltage measurement
 	atmapen_3v2th,									// 3V2 measurement threshold
+	atmapen_reset				= 0x0077,			// Software reset
 	atmapen_baudrate			= 0x0080,			// Baudrate
 	atmapen_parity				= 0x0081,			// Parity
 	atmapen_txdelayh			= 0x0082,			// TX delay highword
@@ -147,7 +165,8 @@ typedef enum {
 	atmapen_timeoutl			= 0x0085,			// Timeout lowword
 	atmapen_t35					= 0x0086,			// t35 Timeout
 	atmapen_devaddr				= 0x0087,			// Device address
-#define MODBUS_SYSREG_COUNT		14					// Number of system register to be mapped
+	atmapen_uartif				= 0x0088,			// UART interface
+#define MODBUS_SYSREG_COUNT		16					// Number of system register to be mapped
 	atmapen_direg				= 0x0100,			// DI status register
 	atmapen_dimode00			= 0x0110,			// DI modes
 	atmapen_dimode01,
@@ -236,6 +255,21 @@ typedef enum {
 } LEOPACK atbaudrateenum;
 
 
+// UART interface types
+typedef enum {
+	RS485		 				= 0,
+	RS232						= 1,
+	RS422						= 2,
+} LEOPACK UartIntEnum;
+
+
+typedef struct mainlStr_ {
+	struct ChannelStr_		*chan;						// Channel base pointer
+	struct StatStr_			*sta;						// Station base pointer
+	struct GenProtocolStr_	*gp;						// Generic protocol base pointer
+	athwenum				hw;							// Board hardware
+} mainlStr;
+
 
 typedef struct ChannelStr_ {
 	//channeliddef			chindex;					// Channel index
@@ -286,14 +320,8 @@ typedef struct StatStr_ {
 	struct StatStr_			*next;						// Next Station pointer
 	void					*realprotocol;				// Real Protocol unique structure
 	//struct ServiceObjStr_	*servobjects;				// Service object structure
-	void					*func_mainproc;				// Main processing function
-	//void					*func_chinit;				// Channel initialization function
-	void					*func_rx;					// Generic receive function
-	//void					*func_commserr;				// Communication error (timeout, sock disconnect) handling function
-	//void					*func_getfirstapp;			// Resolve first application layer function
-	//void					*func_onlinecheck;			// Check is station is online function
-	//void					*func_reduninit;			// Redundant station initialization function
-	//struct LogfileStr_		*logfile;					// Logfile structure
+	CHStateEnum				(*func_mainproc)(DRVARGDEF_MAINPROC);	// Main processing function
+	CHStateEnum				(*func_rx)(DRVARGDEF_RX);				// Generic receive function
 } StatStr;
 
 
@@ -305,22 +333,7 @@ typedef struct GenProtocolStr_ {
 	struct StatStr_			*statptr;					// Parent Station pointer
 	//GenObjectStr			*objecttable;				// General information object tables
 	void					*applayer;					// Real Protocol Application structure
-	//void					*func_xmlslinit;			// Individual XML initialization function (for Slave protocols)
-	//void					*func_xmlmainit;			// Individual XML initialization function (for Master protocols)
-	//void					*func_resloveobj;			// Resolve objects function
-	//void					*func_getinfaddr;			// Function to get information address of the source object
-	//void					*func_commands;				// General command processing function
-	//void					*func_evloginit;			// Event logger initialization function
-	//void					*func_objlinkinit;			// Slave protocol object link initialization function
-	//void					*func_legacyaiev;			// Legacy AI event initialization function
-	//lechar					*xmlpath; 					// Generic Protocol XML configuration file name pointer (including path)
 } GenProtocolStr;
-
-
-typedef struct hardwarenamestr_  {
-	athwenum				type;
-	leptr					strptr;
-} hardwarenamestr;
 
 
 /*typedef struct regvalidtablestr_  {
@@ -329,37 +342,20 @@ typedef struct hardwarenamestr_  {
 	ModData16bitDef			highlimit;
 } regvalidtablestr;*/
 
-typedef struct UARTBaudrateStr_  {
-	atbaudrateenum			brenum;
-	atbaudratedef 			baudrate;
-} UARTBaudrateStr;
 
 
 
 // Always define global variables in C source file
-extern ChannelStr		*Channel0Ptr;
-extern StatStr			*Station0ptr;
-extern athwenum			BoardHardware;
-
+extern mainlStr MainLeiodc;
 extern uint8_t irqasmenum;
 
 
-
-void comms_init();
-void protocolrxproc();
-void protocolmainproc();
-
-ChannelStr *channelinit();
-StatStr *stationinit();
-GenProtocolStr *genprotinit();
-
-uint8_t gethwname(lechar *hwnamebuff, uint8_t bufflen);
+ChannelStr *channelinit(void);
+uint8_t gethwname(lechar *namebuf);
 uint8_t mappinginit(ModReg16bitDef reg, leptr *rdptr, leptr *wrptr);
 void outputpinctrl(uint8_t disable);
-//void pinctrl_setbit(PORT_t *mcuport, uint8_t pin, uint8_t setbit);
-uint8_t baudrateconv(uint16_t brenum16, atbaudratedef *baudrate);
 uint8_t uartsettvalidate(atmappingenum mapreg, ModData16bitDef val);
-//uint8_t updatecfg_validate(atmappingenum mapreg, ModData16bitDef val);
+uint8_t writevalidate(atmappingenum mapreg, ModData16bitDef val, uint8_t *eeupd);
 
 
 #endif /* MAIN_H_ */

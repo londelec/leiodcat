@@ -2,11 +2,14 @@
  ============================================================================
  Name        : 74lv8153.h
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : Header file LED driver module
 
-  Change log  :
+  Change log :
+
+  *********V1.01 08/09/2016**************
+  Local function prototypes removed
 
   *********V1.00 25/02/2015**************
   Initial revision
@@ -14,7 +17,11 @@
  ============================================================================
  */
 
-#include "main.h"
+#ifndef H74LV8153_H_
+#define H74LV8153_H_
+
+
+#include "leiodcat.h"
 
 
 #define LED_PORT_INT_VECT				PORTC_INT1_vect	// port interrupt vector
@@ -36,10 +43,12 @@ typedef struct ic74lv8153str_ {
 } ic74lv8153str;
 
 
-extern ic74lv8153str	leddriver;
+extern ic74lv8153str leddriver;
 
 
-void leddrv_init();
-void leddrv_mainproc();
-void ledupdate();
-void ledregclear();
+void leddrv_init(void);
+void leddrv_mainproc(void);
+//void ledregclear(void);
+
+
+#endif /* H74LV8153_H_ */

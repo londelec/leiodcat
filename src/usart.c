@@ -2,11 +2,15 @@
  ============================================================================
  Name        : usart.c
  Author      : AK
- Version     : V1.03
+ Version     : V1.04
  Copyright   : Property of Londelec UK Ltd
  Description : Atmel UART module
 
   Change log :
+
+  *********V1.04 07/09/2016**************
+  Local functions marked static
+  UART interface type added
 
   *********V1.03 09/04/2016**************
   Fixed: Must enable TXC interrupt when loading last byte
@@ -39,6 +43,17 @@
 #endif	// GLOBAL_DEBUG
 
 
+// Clock source frequency
+#define F_USART							F_CPU			// Source clock frequency
+
+// Buffer sizes
+#define USART_RX_BUFFER_SIZE			512				// Raw buffer size
+
+// UART buffer flags
+#define UARTRTF_BUFFOVFL				0x01			// Receive buffer overflow
+#define UARTRTF_NORX					0x02			// UART doesn't receive (for 74lv8153 communication)
+
+
 // UART control macros
 #define UART_RX_ENABLE		(uartptr->mcuuart->CTRLB |= USART_RXEN_bm);
 #define UART_RX_DISABLE		(uartptr->mcuuart->CTRLB &= ~USART_RXEN_bm);
@@ -51,49 +66,125 @@
 #define UART_TXLED_OFF		if (uartptr->led) uartptr->led->port->OUTSET = uartptr->led->txled;
 #define UART_RXLED_ON		if (uartptr->led) uartptr->led->port->OUTCLR = uartptr->led->rxled;
 #define UART_RXLED_OFF		if (uartptr->led) uartptr->led->port->OUTSET = uartptr->led->rxled;
+#define UART_RS232_ON		MCUP_IFACE.OUTSET = 0x80;
+#define UART_RS485_ON		MCUP_IFACE.OUTCLR = 0x40;
+#define UART_RS422_ON		MCUP_IFACE.OUTCLR = 0x20;\
+							MCUP_CTRL.OUTSET = PIN_RTS;\
+							MCUP_CTRL.DIRSET = PIN_RTS;
+
+
+
+
+/*! \brief Set USART baud rate.
+ *
+ *  Sets the USART's baud rate register.
+ *
+ *  UBRR_Value   : Value written to UBRR
+ *  ScaleFactor  : Time Base Generator Scale Factor
+ *
+ *  Equation for calculation of BSEL value in asynchronous normal speed mode:
+ *  	If ScaleFactor >= 0
+ *  		BSEL = ((I/O clock frequency)/(2^(ScaleFactor)*16*Baudrate))-1
+ *  	If ScaleFactor < 0
+ *  		BSEL = (1/(2^(ScaleFactor)*16))*(((I/O clock frequency)/Baudrate)-1)
+ *
+ *	\note See XMEGA manual for equations for calculation of BSEL value in other
+ *        modes.
+ *
+ *  \param _usart          Pointer to the USART module.
+ *  \param _bselValue      Value to write to BSEL part of Baud control register.
+ *                         Use uint16_t type.
+ *  \param _bScaleFactor   USART baud rate scale factor.
+ *                         Use uint8_t type
+ */
+#define USART_BAUDRATE_SET(_usart, _bselValue, _bScaleFactor)\
+		(_usart)->BAUDCTRLA =(uint8_t)_bselValue;\
+		(_usart)->BAUDCTRLB =(_bScaleFactor << USART_BSCALE0_bp)|(_bselValue >> 8)
 
 
 
 
 /***************************************************************************
-* Initialize UART
+* Allocate space in the buffer for next byte
 * [18/02/2015]
-* New hardware 3100 without MX board
-* RTS pin control added
-* [20/08/2015]
-* Rx interrupt level defined in irq.h now
-* [09/04/2016]
 ***************************************************************************/
-void usart_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity) {
+static uint8_t pushfifo(genbuffstr *buffer, uint8_t discardold) {
 
-
-	switch (BoardHardware) {
-	/*case somerevision:
-		break;*/
-
-	case athwenat3100v11:
-		PORTCFG.MPCMASK = PIN5_bm;
-		PORTK.PIN0CTRL = PORT_INVEN_bm;
-		//pinctrl_setbit(&PORTK, PIN5_bm, PORT_INVEN_bm);	// Invert RTS pin
-		usartport_init(uartptr, &USARTE1, &PORTE, &PORTK, PIN7_bm, PIN6_bm, 0, PIN5_bm);
-		break;
-
-	case athwenmx3100v11:
-	default:
-#ifdef DEBUG_NOUARTTX
-		usartport_init(uartptr, &USARTE1, &PORTE, 0, 0, PIN6_bm, 0, 0);
-#else
-		usartport_init(uartptr, &USARTE1, &PORTE, 0, 0, PIN6_bm, PIN7_bm, 0);
-#endif
-		break;
+	if (buffer->inptr == buffer->outptr) {
+		buffer->inptr++;
+		if (buffer->inptr == buffer->size)
+			buffer->inptr = 0;
+		return LE_OK;
 	}
 
 
-	usarthw_init(uartptr, baudrate, parity, USART_RX_BUFFER_SIZE);
-	uartptr->mcuuart->CTRLA = ((uartptr->mcuuart->CTRLA & ~USART_RXCINTLVL_gm) | USART_RXCINTLVL); // Enable RXC interrupt
-	UART_RX_ENABLE	// Enable receiver
+	if (buffer->inptr > buffer->outptr) {
+		if ((buffer->inptr + 1) == buffer->size) {
+			if (discardold) {	// Discard oldest policy
+				buffer->inptr = 0;
+				if (buffer->outptr == 0) {
+					buffer->outptr++;
+					return LE_FAIL;		// One byte removed from the buffer
+				}
+			}
+			else {		// Preserve buffer contents policy
+				if (buffer->outptr == 0) {
+					return LE_FAIL;		// Can't allocate space buffer overflow
+				}
+			}
+		}
+		else
+			buffer->inptr++;
+		return LE_OK;
+	}
+
+
+	if (buffer->inptr < buffer->outptr) {
+		if (buffer->inptr == (buffer->outptr - 1)) {
+			if (discardold) {	// Discard oldest policy
+				buffer->inptr++;
+				buffer->outptr++;
+				if (buffer->outptr == buffer->size)
+					buffer->outptr = 0;
+				return LE_FAIL;		// One byte removed from the buffer
+			}
+			else {		// Preserve buffer contents policy
+				return LE_FAIL;		// Can't allocate space buffer overflow
+			}
+		}
+		else {	// No overflow
+			buffer->inptr++;
+			return LE_OK;
+		}
+	}
+	return LE_FAIL;		// Impossible situation
 }
 
+
+/***************************************************************************
+* Get pointer to next entry in the buffer
+* [18/02/2015]
+***************************************************************************/
+static uint8_t popfifo(genbuffstr *buffer) {
+
+	if (buffer->inptr == buffer->outptr)
+		return LE_FAIL;		// FIFO already empty
+
+
+	if (buffer->inptr > buffer->outptr) {
+		buffer->outptr++;
+		return LE_OK;
+	}
+
+	if (buffer->inptr < buffer->outptr) {
+		if (buffer->outptr == (buffer->size - 1))
+			buffer->outptr = 0;
+		else
+			buffer->outptr++;
+		return LE_OK;
+	}
+	return LE_FAIL;		// Impossible situation
+}
 
 
 /***************************************************************************
@@ -103,24 +194,29 @@ void usart_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity) 
 * [17/08/2015]
 * Set no receive flag is input pin is not defined
 * [08/04/2016]
+* RTS pin inversion moved to this function
+* [08/09/2016]
 ***************************************************************************/
 void usartport_init(uartatstr *uartptr, USART_t *mcuuart, PORT_t *mcuport, PORT_t *ctrlport, uint8_t outputpin, uint8_t inputpin, uint8_t disabletx, uint8_t rtspin) {
 
-	uartptr->mcuuart = mcuuart;					// MCU UART pointer
-	uartptr->port = mcuport;					// MCU UART port
-	uartptr->port->DIRSET = outputpin;			// Make pin output
-	uartptr->port->DIRCLR = inputpin;			// Make pin input
-	uartptr->disabletxpin = disabletx;			// Initialize disable Tx pin
+	uartptr->mcuuart = mcuuart;				// MCU UART pointer
+	uartptr->port = mcuport;				// MCU UART port
+	mcuport->DIRSET = outputpin;			// Make pin output
+	mcuport->DIRCLR = inputpin;				// Make pin input
+	uartptr->disabletxpin = disabletx;		// Initialize disable Tx pin
 
 	if (ctrlport) {
-		uartptr->ctrlport = ctrlport;			// MCU control port
-		uartptr->rtspin = rtspin;				// RTS pin
-		UART_RTS_RELEASE						// Release RTS pin if defined
-		uartptr->ctrlport->DIRSET = rtspin;		// Make RTS pin output
+		uartptr->ctrlport = ctrlport;		// MCU control port
+		uartptr->rtspin = rtspin;			// RTS pin
+		PORTCFG.MPCMASK = rtspin;
+		ctrlport->PIN0CTRL = PORT_INVEN_bm;	// Invert RTS pin
+
+		UART_RTS_RELEASE					// Release RTS pin if defined
+		ctrlport->DIRSET = rtspin;			// Make RTS pin output
 	}
 
 	if (!inputpin)
-		uartptr->flags |= UARTRTF_NORX;			// This UART doesn't receive
+		uartptr->flags |= UARTRTF_NORX;		// This UART doesn't receive
 }
 
 
@@ -130,14 +226,14 @@ void usartport_init(uartatstr *uartptr, USART_t *mcuuart, PORT_t *mcuport, PORT_
 * Fixed: bselval changed to 16bit
 * [19/08/2015]
 ***************************************************************************/
-void usarthw_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity, uint16_t rxtxbuffsize) {
+void usarthw_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity, uint16_t bufsize) {
 	uint16_t 		bselval;
 
 
 	uartptr->rxtxbuff.inptr = 0;
 	uartptr->rxtxbuff.outptr = 0;
-	uartptr->rxtxbuff.size = rxtxbuffsize;
-	uartptr->rxtxbuff.fifo = calloc(rxtxbuffsize, sizeof(uint8_t));
+	uartptr->rxtxbuff.size = bufsize;
+	uartptr->rxtxbuff.fifo = calloc(bufsize, sizeof(uint8_t));
 
 
 	switch (parity) {
@@ -165,8 +261,6 @@ void usarthw_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity
 }
 
 
-
-
 /***************************************************************************
 * Generic receive function
 * [18/02/2015]
@@ -177,13 +271,15 @@ CHStateEnum channelrx(StatStr *staptr, uint8_t *rxbuffer, TxRx16bitDef *rxlength
 
 
 	for (cnt = 0;; cnt++) {
-		if (popfifo(&uartptr->rxtxbuff) == EXIT_SUCCESS) {
+		if (popfifo(&uartptr->rxtxbuff) == LE_OK) {
 			rxbuffer[cnt] = uartptr->rxtxbuff.fifo[uartptr->rxtxbuff.outptr];
 		}
-		else break;
+		else
+			break;
 	}
 	*rxlength = cnt;
-	if (cnt) return CHCommsRxTx;
+	if (cnt)
+		return CHCommsRxTx;
 	return CHCommsEmpty;
 }
 
@@ -201,7 +297,7 @@ CHStateEnum channeltx(StatStr *staptr, uint8_t *txbuffer, TxRx16bitDef txlength)
 	uartptr->rxtxbuff.outptr = 0;
 
 	for (cnt = 0; cnt < txlength; cnt++) {
-		if (pushfifo(&uartptr->rxtxbuff, 0) == EXIT_SUCCESS) {		// We have adopted the 'preserve buffer contents' policy here
+		if (pushfifo(&uartptr->rxtxbuff, 0) == LE_OK) {		// We have adopted the 'preserve buffer contents' policy here
 			uartptr->rxtxbuff.fifo[uartptr->rxtxbuff.inptr] = txbuffer[cnt];
 		}
 		else return CHCommsEmpty;
@@ -216,8 +312,6 @@ CHStateEnum channeltx(StatStr *staptr, uint8_t *txbuffer, TxRx16bitDef txlength)
 }
 
 
-
-
 /***************************************************************************
 * Check if UART has received data
 * [20/02/2015]
@@ -225,105 +319,23 @@ CHStateEnum channeltx(StatStr *staptr, uint8_t *txbuffer, TxRx16bitDef txlength)
 uint8_t checkrx(uartatstr *uartptr) {
 
 	if (uartptr->rxtxbuff.inptr == uartptr->rxtxbuff.outptr)
-		return EXIT_FAILURE;
+		return LE_FAIL;
 
-	return EXIT_SUCCESS;
+	return LE_OK;
 }
-
-
-/***************************************************************************
-* Allocate space in the buffer for next byte
-* [18/02/2015]
-***************************************************************************/
-uint8_t pushfifo(genbuffstr *buffer, uint8_t discardold) {
-
-	if (buffer->inptr == buffer->outptr) {
-		buffer->inptr++;
-		if (buffer->inptr == buffer->size)
-			buffer->inptr = 0;
-		return EXIT_SUCCESS;
-	}
-
-
-	if (buffer->inptr > buffer->outptr) {
-		if ((buffer->inptr + 1) == buffer->size) {
-			if (discardold) {	// Discard oldest policy
-				buffer->inptr = 0;
-				if (buffer->outptr == 0) {
-					buffer->outptr++;
-					return EXIT_FAILURE;		// One byte removed from the buffer
-				}
-			}
-			else {		// Preserve buffer contents policy
-				if (buffer->outptr == 0) {
-					return EXIT_FAILURE;		// Can't allocate space buffer overflow
-				}
-			}
-		}
-		else buffer->inptr++;
-		return EXIT_SUCCESS;
-	}
-
-
-	if (buffer->inptr < buffer->outptr) {
-		if (buffer->inptr == (buffer->outptr - 1)) {
-			if (discardold) {	// Discard oldest policy
-				buffer->inptr++;
-				buffer->outptr++;
-				if (buffer->outptr == buffer->size) buffer->outptr = 0;
-				return EXIT_FAILURE;		// One byte removed from the buffer
-			}
-			else {		// Preserve buffer contents policy
-				return EXIT_FAILURE;		// Can't allocate space buffer overflow
-			}
-		}
-		else {	// No overflow
-			buffer->inptr++;
-			return EXIT_SUCCESS;
-		}
-	}
-	return EXIT_FAILURE;		// Impossible situation
-}
-
-
-/***************************************************************************
-* Get pointer to next entry in the buffer
-* [18/02/2015]
-***************************************************************************/
-uint8_t popfifo(genbuffstr *buffer) {
-
-	if (buffer->inptr == buffer->outptr)
-		return EXIT_FAILURE;		// FIFO already empty
-
-
-	if (buffer->inptr > buffer->outptr) {
-		buffer->outptr++;
-		return EXIT_SUCCESS;
-	}
-
-	if (buffer->inptr < buffer->outptr) {
-		if (buffer->outptr == (buffer->size - 1))
-			buffer->outptr = 0;
-		else
-			buffer->outptr++;
-		return EXIT_SUCCESS;
-	}
-	return EXIT_FAILURE;		// Impossible situation
-}
-
-
 
 
 /***************************************************************************
 * UART receive ISR
 * [18/02/2015]
 ***************************************************************************/
-void uartisr_rx(uartatstr *uartptr) {
+static void uartisr_rx(uartatstr *uartptr) {
 
-	if (pushfifo(&uartptr->rxtxbuff, 0) == EXIT_SUCCESS) {		// We have adopted the 'preserve buffer contents' policy here
+	if (pushfifo(&uartptr->rxtxbuff, 0) == LE_OK) {		// We have adopted the 'preserve buffer contents' policy here
 		uartptr->rxtxbuff.fifo[uartptr->rxtxbuff.inptr] = uartptr->mcuuart->DATA;	// Store received data byte in fifo
 	}
-	else uartptr->flags |= UARTRTF_BUFFOVFL;
+	else
+		uartptr->flags |= UARTRTF_BUFFOVFL;
 
 
 	UART_RXLED_ON		// Turn the Rx LED ON
@@ -338,7 +350,7 @@ void uartisr_rx(uartatstr *uartptr) {
 * Enable receiver only if UART is supposed to receive
 * [08/04/2016]
 ***************************************************************************/
-void usartisr_txcomplete(uartatstr *uartptr) {
+static void usartisr_txcomplete(uartatstr *uartptr) {
 
 	uartptr->rxtxbuff.inptr = 0;
 	uartptr->rxtxbuff.outptr = 0;
@@ -367,11 +379,11 @@ void usartisr_txcomplete(uartatstr *uartptr) {
 * never being serviced.
 * [09/04/2016]
 ***************************************************************************/
-void usartisr_dataregempty(uartatstr *uartptr) {
+static void usartisr_dataregempty(uartatstr *uartptr) {
 	uint8_t 		txbyte;
 
 
-	if (popfifo(&uartptr->rxtxbuff) == EXIT_SUCCESS) {
+	if (popfifo(&uartptr->rxtxbuff) == LE_OK) {
 		txbyte = uartptr->rxtxbuff.fifo[uartptr->rxtxbuff.outptr];		// Get data from fifo
 
 		uartptr->mcuuart->DATA = txbyte;	// We must store byte in TX register before enabling TXC interrupt
@@ -418,7 +430,7 @@ ISR(UART_GENERIC_IRQ_VECTOR) {
 	}
 
 
-	for (chanptr = Channel0Ptr; chanptr; chanptr = chanptr->next) {
+	for (chanptr = MainLeiodc.chan; chanptr; chanptr = chanptr->next) {
 		if (chanptr->usart.mcuuart == requart) {
 			switch (irqasmenum) {
 			case USARTC1_RXC_vect_num:
@@ -445,3 +457,55 @@ ISR(UART_GENERIC_IRQ_VECTOR) {
 		}
 	}
 }
+
+
+/***************************************************************************
+* Initialize UART
+* [18/02/2015]
+* New hardware 3100 without MX board
+* RTS pin control added
+* [20/08/2015]
+* Rx interrupt level defined in irq.h now
+* [09/04/2016]
+* UART interface type added
+* [08/09/2016]
+***************************************************************************/
+void usart_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity, UartIntEnum uartif) {
+
+
+	if (MainLeiodc.hw & ATHWF_MXBOARD) {	// MX board present
+#ifdef DEBUG_NOUARTTX
+		usartport_init(uartptr, &USARTE1, &MCUP_UART, 0, 0, PIN_RXD, 0, 0);
+#else
+		usartport_init(uartptr, &USARTE1, &MCUP_UART, 0, 0, PIN_RXD, PIN_TXD, 0);
+#endif
+	}
+	else {	// IO module without MX board
+		MCUP_IFACE.OUT = 0x60;				// All interfaces disabled RS232[7] = 0; RS485[6] = 1; RS422[5] = 1
+		MCUP_IFACE.DIRSET = MASK_UIFACE;	// Make pins [5..7] outputs
+
+		switch (uartif) {
+		case RS232:
+			UART_RS232_ON
+			goto nocontrol;
+
+		case RS422:
+			UART_RS422_ON
+			nocontrol:
+			usartport_init(uartptr, &USARTE1, &MCUP_UART, 0, PIN_TXD, PIN_RXD, 0, 0);
+			break;
+
+		//case RS485:
+		default:
+			UART_RS485_ON
+			usartport_init(uartptr, &USARTE1, &MCUP_UART, &MCUP_CTRL, PIN_TXD, PIN_RXD, 0, PIN_RTS);
+			break;
+		}
+	}
+
+
+	usarthw_init(uartptr, baudrate, parity, USART_RX_BUFFER_SIZE);
+	uartptr->mcuuart->CTRLA = ((uartptr->mcuuart->CTRLA & ~USART_RXCINTLVL_gm) | USART_RXCINTLVL); // Enable RXC interrupt
+	UART_RX_ENABLE	// Enable receiver
+}
+

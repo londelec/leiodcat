@@ -144,14 +144,14 @@ uint8_t timercheck_fine(finetmstr *tptr) {
 
 
 	if (frozent.sec < tptr->sec) {
-		return EXIT_FAILURE;
+		return LE_FAIL;
 	}
 	else if (frozent.sec == tptr->sec) {
 		if (frozent.usec100 < tptr->usec100) {
-			return EXIT_FAILURE;
+			return LE_FAIL;
 		}
 	}
-	return EXIT_SUCCESS;
+	return LE_OK;
 }
 
 

@@ -2,11 +2,14 @@
  ============================================================================
  Name        : atmeldefs.h
  Author      : AK
- Version     : V1.02
+ Version     : V1.03
  Copyright   : Property of Londelec UK Ltd
  Description : Definitions header file for Atmel MCU projects
 
-  Change log  :
+  Change log :
+
+  *********V1.03 07/09/2016**************
+  New hardware enums 4000, 0400, 2200 added
 
   *********V1.02 17/08/2015**************
   New hardware enum 3100 without MX board
@@ -45,11 +48,16 @@ typedef	uint32_t					atuarttodef;		/* UART timeout size definition */
 
 // Atmel board/hardware types
 // Don't change enums, these need to match
-// bootstrap resistors on PE port to properly identify the board type
+// bootstrap resistors on PE port to identify the board type
+#define ATHW_ID_MASK			0x3F		// Hardware ID mask
+#define ATHWF_MXBOARD			0x80		// MX board identification flag
 typedef enum {
 	athwenundefined				= 0x00,		// Undefined hardware
-	athwenmx3100v11				= 0x01,		// MX present IO=3100 PCB V1.1 V12
-	athwenat3100v11				= 0x02,		// No MX IO=3100 PCB V1.1 V1.2
+	athwenmx3100v11				= 0x01,		// IO=3100 PCB V1.1 V1.2 V1.3, MX presence detected with PIN_MXAUTOID [PK5]
+	athwenat3100v11				= 0x02,		// Legacy, used only for FW <= 1.04, No MX IO=3100 PCB V1.1 V1.2
+	athwenat2200v10				= 0x03,		// IO=2200 PCB V1.0, MX presence detected with PIN_MXAUTOID [PK5]
+	athwenat4000v10				= 0x04,		// IO=4000 PCB V1.0, MX presence detected with PIN_MXAUTOID [PK5]
+	athwenat0400v10				= 0x06,		// IO=0400 PCB V1.0, MX presence detected with PIN_MXAUTOID [PK5]
 } LEOPACK athwenum;
 
 
@@ -79,7 +87,6 @@ typedef struct uartatstr_ {
 	uint8_t 				flags;			// Runtime flags
 	uartledstr	 			*led;			// LED structure
 } uartatstr;
-
 
 
 #endif /* AT_DEFS_H_ */

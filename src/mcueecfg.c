@@ -2,11 +2,16 @@
  ============================================================================
  Name        : mcueecfg.c
  Author      : AK
- Version     : V2.01
+ Version     : V2.02
  Copyright   : Property of Londelec UK Ltd
  Description : MCU EEPROM configuration parser
 
-  Change log  :
+  Change log :
+
+  *********V2.02 07/09/2016**************
+  Fixed: eesearch data function returns 0 pointer if 0xff (empty) byte is encountered in EEPROM
+  Local functions marked static
+  UART interface type added
 
   *********V2.01 17/08/2015**************
   Fixed: Exclude DO register when resolving EEPROM group
@@ -26,6 +31,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 //#include <stdint.h>
 //#include <avr/io.h>
 #include <avr/eeprom.h>
@@ -33,7 +39,7 @@
 
 
 
-#include "main.h"
+#include "leiodcat.h"
 #include "ledefs.h"
 #include "mcueecfg.h"
 #include "board.h"
@@ -50,7 +56,30 @@
 #define SIZEOF_EEDTENT(mstruct)		(sizeof(mstruct) + sizeof(mcueedthead))
 
 
-const mcueecbtablestr mcueecbtable[] PROGMEM = {
+typedef struct mcueegrphead_ {
+	mcueegrpenum			id;							// Group ID (UART, Powman, etc)
+	eegrpsizeDef			size;						// Group size excluding group header
+} mcueegrphead;
+
+
+typedef struct mcueedthead_ {							// Data header
+	EEDATA_HEADER										// Data type (enum) and size - byte, word, dword
+} mcueedthead;
+
+
+// Macro for argument definitions
+#define MCUEEARGDEF_GRPFUNC uint8_t **memptr
+
+
+static eegrpsizeDef eegrpcreate_uart(MCUEEARGDEF_GRPFUNC);
+static eegrpsizeDef eegrpcreate_powman(MCUEEARGDEF_GRPFUNC);
+static eegrpsizeDef eegrpcreate_board(MCUEEARGDEF_GRPFUNC);
+
+
+static const struct mcueecbtablestr_ {
+	mcueegrpenum			id;							// Group ID (UART, Powman, etc)
+	eegrpsizeDef			(*createfunc)(MCUEEARGDEF_GRPFUNC);	// Function that creates group and populates data
+} mcueecbtable[] PROGMEM = {
 	{eegren_uart0, 		eegrpcreate_uart},
 	{eegren_powman, 	eegrpcreate_powman},
 	{eegren_board, 		eegrpcreate_board},
@@ -131,58 +160,440 @@ const mcueecbtablestr mcueecbtable[] PROGMEM = {
 
 
 /***************************************************************************
+* Save data byte/word/dword to EEPROM
+* [15/06/2015]
+***************************************************************************/
+/*static void eeread_data(leptr eeadr, uint32_t *rddword, uint8_t size) {
+
+	if (!rddword)
+		return;
+
+	switch (size) {	// Select size to read
+	case 1:
+		*rddword = eeprom_read_byte((uint8_t *) eeadr);
+		break;
+
+	case 2:
+		*rddword = eeprom_read_word((uint16_t *) eeadr);
+		break;
+
+	case 4:
+		*rddword = eeprom_read_dword((uint32_t *) eeadr);
+		break;
+
+	default:
+		break;
+	}
+}*/
+
+
+/***************************************************************************
+* Save data byte/word/dword to EEPROM
+* [15/06/2015]
+***************************************************************************/
+/*static void eewrite_data(leptr eeadr, uint32_t wrdword, uint8_t size) {
+
+
+	switch (size) {	// Select size to write
+	case 1:
+		eeprom_write_byte((uint8_t *) eeadr, wrdword);
+		break;
+
+	case 2:
+		eeprom_write_word((uint16_t *) eeadr, wrdword);
+		break;
+
+	case 4:
+		eeprom_write_dword((uint32_t *) eeadr, wrdword);
+		break;
+
+	default:
+		break;
+	}
+}*/
+
+
+/***************************************************************************
+* Populate data entry created in memory
+* [15/06/2015]
+* memcpy function used
+* [08/09/2016]
+***************************************************************************/
+static void eepopoulate_datamem(uint8_t **memptr, uint8_t *wrdata, uint8_t size, uint8_t basedten, uint8_t count) {
+	uint8_t			cnt;
+
+
+	for (cnt = 0; cnt < count; cnt++) {
+		((mcueedthead *) *memptr)->type = basedten + cnt;
+		((mcueedthead *) *memptr)->size = size;
+		//*memptr += sizeof(mcueedthead);
+
+
+		memcpy((*memptr) + sizeof(mcueedthead), &wrdata[cnt * size], size);
+		/*(*memptr)[0] = wrdata[cnt * size];
+		if (size > 1) (*memptr)[1] = wrdata[(cnt * size) + 1];
+		if (size > 2) {
+			(*memptr)[2] = wrdata[(cnt * size) + 2];
+			(*memptr)[3] = wrdata[(cnt * size) + 3];
+		}*/
+		//*memptr += size;
+		*memptr += size + sizeof(mcueedthead);
+	}
+}
+
+
+/***************************************************************************
+* Search group in the EEPROM using identifier
+* [14/06/2015]
+* Read EEPROM block function used
+* [10/09/2016]
+***************************************************************************/
+static leptr eesearch_group(mcueegrpenum groupid, eegrpsizeDef *groupsize, leptr *nextavail) {
+	leptr			groupptr;
+	mcueegrphead	grouphead;
+
+
+	if (nextavail)
+		*nextavail = 0;
+
+
+	// Start reading from first group after EEPROM header
+	for (groupptr = sizeof(mcueeheader); groupptr < MCUEE_EESIZE; groupptr += grouphead.size + sizeof(mcueegrphead)) {
+		eeprom_read_block(&grouphead, (const void *) groupptr, sizeof(mcueegrphead));
+		//grouphead.id = eeprom_read_byte((uint8_t *) groupptr);		// Read group identifier
+		//grouphead.size = eeprom_read_word((uint16_t *) (groupptr + sizeof(grouphead.id)));
+		if (grouphead.id == eegren_undefined)						// Group undefined (most likely empty memory)
+			break;
+
+
+		if (grouphead.id == groupid) {		// Group ID found
+			if (groupsize)
+				*groupsize = grouphead.size;
+			return groupptr;
+		}
+	}
+
+
+	if (groupsize)
+		*groupsize = 0;
+
+	if (nextavail)
+		*nextavail = groupptr;
+
+	return 0;		// Group is not found
+}
+
+
+/***************************************************************************
+* Search data in the EEPROM using identifier
+* [15/06/2015]
+* Fixed: Return 0 pointer if 0xff (empty) byte is encountered in EEPROM
+* Read EEPROM block function used
+* [10/09/2016]
+***************************************************************************/
+static leptr eesearch_data(uint8_t dataid, leptr groupptr, eegrpsizeDef groupsize, uint32_t *rddword) {
+	leptr			dataptr;
+	mcueedthead		datahead;
+
+
+	*rddword = 0;	// Clean dword
+
+	for (dataptr = groupptr + sizeof(mcueegrphead); dataptr < (groupptr + sizeof(mcueegrphead) + groupsize); dataptr += datahead.size + sizeof(mcueedthead)) {
+		eeprom_read_block(&datahead, (const void *) dataptr, sizeof(mcueedthead));
+		//datahead.type = eeprom_read_byte((uint8_t *) dataptr);	// Read data type identifier
+		//datahead.size = eeprom_read_byte((uint8_t *) (dataptr + sizeof(datahead.type)));
+		if (datahead.type == 0xff)
+			return 0;	// Data type undefined (most likely empty memory)
+
+
+		if (datahead.type == dataid) {	// Data ID found
+			//eeread_data(dataptr + sizeof(mcueedthead), rddword, datahead.size);
+			eeprom_read_block(rddword, (const void *) dataptr + sizeof(mcueedthead), datahead.size);
+			return dataptr;
+		}
+	}
+	return 0;	// Data is not found
+}
+
+
+/***************************************************************************
+* Resolve group creation function from table and execute it
+* [20/08/2015]
+***************************************************************************/
+static eegrpsizeDef eegrpfunc(mcueegrpenum groupid, uint8_t **memptr) {
+	uint8_t			cnt;
+	mcueegrpenum	tabid;
+	eegrpsizeDef	(*func)(MCUEEARGDEF_GRPFUNC);
+
+
+	for (cnt = 0; cnt < ARRAY_SIZE(mcueecbtable); cnt++) {
+		tabid = pgm_read_byte(&mcueecbtable[cnt].id);		// Read group id from program space
+		if (tabid == groupid) {
+			func = (void *) pgm_read_word(&mcueecbtable[cnt].createfunc);	// Read function pointer from program space
+			return func(memptr);
+		}
+	}
+	return 0;
+}
+
+
+/***************************************************************************
+* Populate data to 'uart' group created in memory
+* [19/08/2015]
+* UART interface type added
+* [08/09/2016]
+***************************************************************************/
+static eegrpsizeDef eegrpcreate_uart(MCUEEARGDEF_GRPFUNC) {
+	eegrpsizeDef	groupsize;
+
+
+	groupsize =
+			SIZEOF_EEDTENT(atbaudrateenum) +
+			SIZEOF_EEDTENT(atparitydef) +
+			(2 * (SIZEOF_EEDTENT(atuarttodef))) + 	// Timeout, TxDelay
+			SIZEOF_EEDTENT(uint16_t) + 				// t35
+			SIZEOF_EEDTENT(DevAddrDef) +
+			SIZEOF_EEDTENT(uint8_t);				// Interface RS232/485/422
+
+
+	if (memptr) {
+		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.bren16, sizeof(atbaudrateenum), eedten_uart_baudrate, 1);
+		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.parity, sizeof(atparitydef), eedten_uart_parity, 1);
+		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.txdelayl, sizeof(atuarttodef), eedten_uart_txdelay, 1);
+		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.timeoutl, sizeof(atuarttodef), eedten_uart_timeout, 1);
+		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.t35, sizeof(uint16_t), eedten_uart_t35, 1);
+		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.devaddr, sizeof(DevAddrDef), eedten_uart_address, 1);
+		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.uartif, sizeof(uint8_t), eedten_uart_iface, 1);
+	}
+	return groupsize;
+}
+
+
+/***************************************************************************
+* Populate data to 'powman' group created in memory
+* [17/06/2015]
+***************************************************************************/
+static eegrpsizeDef eegrpcreate_powman(MCUEEARGDEF_GRPFUNC) {
+	eegrpsizeDef	groupsize;
+
+
+	groupsize = SIZEOF_EEDTENT(MXpower.cfg.thadc3v2);
+	if (memptr) {
+		eepopoulate_datamem(memptr, (uint8_t *) &MXpower.cfg.thadc3v2, sizeof(MXpower.cfg.thadc3v2), eedten_powman_thadc3v2, 1);
+	}
+	return groupsize;
+}
+
+
+/***************************************************************************
+* Populate data to 'board' group created in memory
+* [15/06/2015]
+***************************************************************************/
+static eegrpsizeDef eegrpcreate_board(MCUEEARGDEF_GRPFUNC) {
+	eegrpsizeDef	groupsize = 0;
+
+
+	if (boardio.diptr) {
+		groupsize += (boardio.diptr->count * (
+				SIZEOF_EEDTENT(boardio.diptr->mode[0]) +
+				SIZEOF_EEDTENT(boardio.diptr->filterconst[0])));
+	}
+
+	if (boardio.doptr) {
+		groupsize += (boardio.doptr->count * (
+				SIZEOF_EEDTENT(boardio.doptr->mode[0]) +
+				SIZEOF_EEDTENT(boardio.doptr->pulsedur[0])));
+	}
+
+	if (groupsize && memptr) {
+		if (boardio.diptr) {
+			eepopoulate_datamem(memptr, (uint8_t *) boardio.diptr->mode, sizeof(boardio.diptr->mode[0]), eedten_board_dimode00, boardio.diptr->count);
+			eepopoulate_datamem(memptr, (uint8_t *) boardio.diptr->filterconst, sizeof(boardio.diptr->filterconst[0]), eedten_board_diflt00, boardio.diptr->count);
+		}
+		if (boardio.doptr) {
+			eepopoulate_datamem(memptr, (uint8_t *) boardio.doptr->mode, sizeof(boardio.doptr->mode[0]), eedten_board_domode00, boardio.doptr->count);
+			eepopoulate_datamem(memptr, (uint8_t *) boardio.doptr->pulsedur, sizeof(boardio.doptr->pulsedur[0]), eedten_board_dopul00, boardio.doptr->count);
+		}
+	}
+	return groupsize;
+}
+
+
+/***************************************************************************
+* Write group header to EEPROM
+* [16/06/2015]
+***************************************************************************/
+static void eepopoulate_grouphead(uint8_t **memptr, mcueegrpenum groupid, uint16_t size) {
+
+
+	((mcueegrphead *) *memptr)->id = groupid;
+	((mcueegrphead *) *memptr)->size = size;
+	*memptr += sizeof(mcueegrphead);
+}
+
+
+/***************************************************************************
+* Resolve EEPROM group identifier from Modbus register
+* [15/06/2015]
+* Fixed: Exclude DO register when resolving EEPROM group
+* Data validation added
+* [17/08/2015]
+* UART interface type added
+* [10/09/2016]
+***************************************************************************/
+mcueegrpenum eedata_validate(atmappingenum mapreg, ModData16bitDef val, uint8_t *valid) {
+	mcueegrpenum	groupid = 0;
+
+
+	if (valid)
+		*valid = 0;
+
+
+	if (
+			(mapreg >= atmapen_dimode00) &&
+			(mapreg <= atmapen_dimode0F)) {
+		groupid = eegren_board;
+
+		if ((val < modbusdimden_spi) || (val > modbusdimden_spi))
+			goto failed;
+		//return eegren_board;
+	}
+	else if (
+			(mapreg >= atmapen_domode00) &&
+			(mapreg <= atmapen_domode0F)) {
+		groupid = eegren_board;
+
+		if ((val < modbusdomden_pulseout) || (val > modbusdomden_pulseout))
+			goto failed;
+		//return eegren_board;
+	}
+	else if (
+			(mapreg >= atmapen_dif00) &&
+			(mapreg <= atmapen_dif0F)) {
+		groupid = eegren_board;
+
+		if (val < 1)
+			goto failed;
+		//return eegren_board;
+	}
+	else if (
+			(mapreg >= atmapen_dopul00) &&
+			(mapreg <= atmapen_dopul0F)) {
+		groupid = eegren_board;
+
+		if (val < 1)
+			goto failed;
+		//return eegren_board;
+	}
+	else if (mapreg == atmapen_3v2th) {
+		groupid = eegren_powman;
+		//return eegren_powman;
+	}
+	else if (
+			(mapreg >= atmapen_baudrate) &&
+			(mapreg <= atmapen_uartif)) {
+		groupid = eegren_uart0;
+
+		if (uartsettvalidate(mapreg, val) == LE_FAIL)
+			goto failed;
+		//return eegren_uart0;
+	}
+	else {	// TODO resolve other groups
+		goto failed;		// Mapped register is not part of EEPROM configuration
+	}
+
+
+	if (valid)
+		*valid = 1;
+
+
+	failed:
+	return groupid;	// Return resolved group ID or 0 if mapped register is not part of EEPROM configuration
+}
+
+
+/***************************************************************************
+* Check CRC of the EEPROM configuration
+* [18/06/2015]
+***************************************************************************/
+uint8_t eeconf_crc(uint8_t updatecrc) {
+	uint16_t			cnt;
+	uint8_t 			rdbyte;
+	uint16_t 			calccrc = 0xFFFF;
+	uint16_t 			eecrc;
+	eecfgsizeDef		configsize;
+
+
+	configsize = eeprom_read_word((uint16_t *) (sizeof(mcueeheader) - sizeof(eecfgsizeDef)));
+
+
+	for (cnt = 0; cnt < configsize; cnt++) {
+		rdbyte = eeprom_read_byte((uint8_t *) cnt);
+		buildCRC16(&calccrc, rdbyte);
+	}
+
+
+	if (updatecrc) {
+		eeprom_write_word((uint16_t *) configsize, calccrc);	// Append CRC at the end of the configuration
+		return LE_OK;							// We just updated CRC so surely it is correct :)
+	}
+	else{
+		eecrc = eeprom_read_word((uint16_t *) configsize);	// Read CRC from EEPROM
+		if (calccrc == eecrc)
+			return LE_OK;		// Correct CRC
+	}
+	return LE_FAIL;				// Incorrect CRC
+}
+
+
+/***************************************************************************
 * Get configuration data from EEPROM
 * [28/12/2014]
 * EEPROM data parsing moved to separate functions
 * [16/06/2015]
+* Request update argument added
+* [08/09/2016]
 ***************************************************************************/
-uint8_t eeconf_get(mcueegrpenum groupid, uint8_t dataid, uint32_t *rddword) {
+uint8_t eeconf_get(mcueegrpenum groupid, uint8_t dataid, uint32_t *rddword, uint8_t *requpd) {
 	leptr			groupptr, dataptr;
 	eegrpsizeDef	groupsize;
 
 
 	if (!(boardio.rflags & BOARDRF_EECONF_CORRUPTED)) {	// Ensure configuration is not corrupted
 		if (!(boardio.eerdmask & (1 << groupid))) {		// Check if read is enabled for current group
-			groupptr = eesearch_group(groupid, &groupsize, NULL);
-			if (groupptr) {
-				dataptr = eesearch_data(dataid, groupptr, groupsize, rddword);
-				if (dataptr) return EXIT_SUCCESS;
+			if ((groupptr = eesearch_group(groupid, &groupsize, NULL))) {
+				if ((dataptr = eesearch_data(dataid, groupptr, groupsize, rddword)))
+					return LE_OK;
 			}
 		}
 	}
-	return EXIT_FAILURE;
+
+	if (requpd)
+		*requpd = 1;
+	return LE_FAIL;
 }
 
 
 /***************************************************************************
 * Check if it is possible to write received byte to EEPROM
 * [18/08/2015]
+* Data value validation moved separate function
+* [10/09/2016]
 ***************************************************************************/
-uint8_t eeconf_validate(atmappingenum mapreg, ModData16bitDef val, uint8_t *updatereq) {
-	mcueegrpenum	groupid;
+uint8_t eegroup_validate(mcueegrpenum groupid) {
 	leptr			groupptr;
 	eegrpsizeDef	groupsize, newgrpsize;
 
 
-	groupid = eegroupid_resolve(mapreg, val, updatereq);	// Search EEPROM group to be updated based on modbus register
-	if (groupid) {
-		if (!(boardio.eewrmask & (1 << groupid))) {		// Check if write is enabled for current group
-
-			groupptr = eesearch_group(groupid, &groupsize, NULL);
-			if (groupptr) {
-
-				newgrpsize = eegrpfunc(groupid, NULL);	// This is just to get a size of the new group which is going to be created
-				if (groupsize == newgrpsize) {			// Ensure size of the group currently stored in the EEPROM is equal to the group which is about to be created
-					return EXIT_SUCCESS;				// It is possible to save received data to EEPROM
-				}
+	if (!(boardio.eewrmask & (1 << groupid))) {		// Write is enabled for this group
+		if ((groupptr = eesearch_group(groupid, &groupsize, NULL))) {
+			newgrpsize = eegrpfunc(groupid, NULL);	// This is just to get a size of the new group which is going to be created
+			if (groupsize == newgrpsize) {			// Ensure size of the group currently stored in the EEPROM is equal to the group which is about to be created
+				return LE_OK;	// It is possible to save received data to EEPROM
 			}
 		}
 	}
-	else {
-		if (updatereq && !(*updatereq))
-			return EXIT_SUCCESS;	// Current register is not part not part of EEPROM configuration
-	}
-	return EXIT_FAILURE;	// Validation failed, impossible to save received data to EEPROM
+	return LE_FAIL;		// Validation failed, impossible to save group to EEPROM
 }
 
 
@@ -198,11 +609,8 @@ void eeconf_update(ModbusRegStr *regmem) {
 	eegrpsizeDef	groupsize;
 
 
-	groupid = eegroupid_resolve(regmem->reg, *regmem->wrdata, NULL);	// Search EEPROM group to be updated based on modbus register
-	if (groupid) {
-
-		groupptr = eesearch_group(groupid, &groupsize, NULL);
-		if (groupptr) {
+	if ((groupid = eedata_validate(regmem->reg, *regmem->wrdata, NULL))) {	// Search EEPROM group to be updated based on modbus register
+		if ((groupptr = eesearch_group(groupid, &groupsize, NULL))) {
 			uint8_t *membuff = calloc(groupsize, 1);	// Allocate correct amount of memory
 			uint8_t	*memptr = membuff;
 			eegrpfunc(groupid, &memptr);			// Populate memory with group data
@@ -228,8 +636,10 @@ void eeconf_update(ModbusRegStr *regmem) {
 * [17/06/2015]
 * Group create functions generalized and their pointers stored in a table
 * [18/08/2015]
+* Write EEPROM block function used
+* [10/09/2016]
 ***************************************************************************/
-void eeconf_restructure() {
+void eeconf_restructure(void) {
 	uint8_t			bitcnt;
 	leptr			groupptr = 0;
 	eegrpsizeDef	groupsize;
@@ -279,354 +689,10 @@ void eeconf_restructure() {
 
 	if (requiredsize) {
 		eeprom_write_block(membuff, (void *) (groupptr), requiredsize);
-		eewrite_data((sizeof(mcueeheader) - sizeof(eecfgsizeDef)), (groupptr + requiredsize), sizeof(eecfgsizeDef));		// Overall size of the configuration
+		//eewrite_data((sizeof(mcueeheader) - sizeof(eecfgsizeDef)), (groupptr + requiredsize), sizeof(eecfgsizeDef));	// Overall size of the configuration
+		eeprom_write_word((uint16_t *) (sizeof(mcueeheader) - sizeof(eecfgsizeDef)), (groupptr + requiredsize));
 		eeconf_crc(1);
 		boardio.rflags &= ~BOARDRF_EECONF_CORRUPTED;
 		free(membuff);	// Free allocated memory
 	}
-}
-
-
-/***************************************************************************
-* Search group in the EEPROM using identifier
-* [14/06/2015]
-***************************************************************************/
-leptr eesearch_group(mcueegrpenum groupid, eegrpsizeDef *groupsize, leptr *nextavail) {
-	leptr			groupptr;
-	mcueegrphead	grouphead;
-
-
-	if (nextavail) *nextavail = 0;
-
-
-	// Start reading from first group after EEPROM header
-	for (groupptr = sizeof(mcueeheader); groupptr < MCUEE_EESIZE; groupptr += grouphead.size + sizeof(mcueegrphead)) {
-		grouphead.id = eeprom_read_byte((uint8_t *) groupptr);		// Read group identifier
-		if (grouphead.id == eegren_undefined)						// Group undefined (most likely empty memory)
-			break;
-		grouphead.size = eeprom_read_word((uint16_t *) (groupptr + sizeof(grouphead.id)));
-
-
-		if (grouphead.id == groupid) {		// Group ID found
-			if (groupsize) *groupsize = grouphead.size;
-			return groupptr;
-		}
-	}
-
-
-	if (groupsize) *groupsize = 0;
-	if (nextavail) *nextavail = groupptr;
-	return 0;		// Group is not found
-}
-
-
-/***************************************************************************
-* Search data in the EEPROM using identifier
-* [15/06/2015]
-***************************************************************************/
-leptr eesearch_data(uint8_t dataid, leptr groupptr, eegrpsizeDef groupsize, uint32_t *rddword) {
-	leptr			dataptr;
-	mcueedthead		datahead;
-
-
-	for (dataptr = groupptr + sizeof(mcueegrphead); dataptr < (groupptr + sizeof(mcueegrphead) + groupsize); dataptr += datahead.size + sizeof(mcueedthead)) {
-		datahead.type = eeprom_read_byte((uint8_t *) dataptr);	// Read data type identifier
-		if (datahead.type == 0xff)
-			return EXIT_FAILURE;			// Data type undefined (most likely empty memory)
-		datahead.size = eeprom_read_byte((uint8_t *) (dataptr + sizeof(datahead.type)));
-
-
-		if (datahead.type == dataid) {	// Data ID found
-			eeread_data(dataptr + sizeof(mcueedthead), rddword, datahead.size);
-			return dataptr;
-		}
-	}
-	return 0;		// Data is not found
-}
-
-
-/***************************************************************************
-* Save data byte/word/dword to EEPROM
-* [15/06/2015]
-***************************************************************************/
-void eeread_data(leptr eeadr, uint32_t *rddword, uint8_t size) {
-
-	if (!rddword) return;
-
-	switch (size) {	// Select size to read
-	case 1:
-		*rddword = eeprom_read_byte((uint8_t *) eeadr);
-		break;
-
-	case 2:
-		*rddword = eeprom_read_word((uint16_t *) eeadr);
-		break;
-
-	case 4:
-		*rddword = eeprom_read_dword((uint32_t *) eeadr);
-		break;
-
-	default:
-		break;
-	}
-}
-
-
-/***************************************************************************
-* Save data byte/word/dword to EEPROM
-* [15/06/2015]
-***************************************************************************/
-void eewrite_data(leptr eeadr, uint32_t wrdword, uint8_t size) {
-
-	switch (size) {	// Select size to write
-	case 1:
-		eeprom_write_byte((uint8_t *) eeadr, wrdword);
-		break;
-
-	case 2:
-		eeprom_write_word((uint16_t *) eeadr, wrdword);
-		break;
-
-	case 4:
-		eeprom_write_dword((uint32_t *) eeadr, wrdword);
-		break;
-
-	default:
-		break;
-	}
-}
-
-
-
-/***************************************************************************
-* Resolve group creation function from table and execute it
-* [20/08/2015]
-***************************************************************************/
-eegrpsizeDef eegrpfunc(mcueegrpenum groupid, uint8_t **memptr) {
-	uint8_t			cnt;
-	mcueegrpenum	tabid;
-	eegrpsizeDef	(*func)(MCUEEARGDEF_GRPFUNC);
-
-
-	for (cnt = 0; cnt < ARRAY_SIZE(mcueecbtable); cnt++) {
-		tabid = pgm_read_byte(&mcueecbtable[cnt].id);		// Read group id from program space
-		if (tabid == groupid) {
-			func = (void *) pgm_read_word(&mcueecbtable[cnt].createfunc);	// Read function pointer from program space
-			return func(memptr);
-		}
-	}
-	return 0;
-}
-
-
-/***************************************************************************
-* Populate data to 'uart' group created in memory
-* [19/08/2015]
-***************************************************************************/
-eegrpsizeDef eegrpcreate_uart(MCUEEARGDEF_GRPFUNC) {
-	eegrpsizeDef	groupsize = 0;
-
-
-	groupsize += SIZEOF_EEDTENT(atbaudrateenum);
-	groupsize += SIZEOF_EEDTENT(atparitydef);
-	groupsize += 2 * (SIZEOF_EEDTENT(atuarttodef));	// Timeout, TxDelay
-	groupsize += SIZEOF_EEDTENT(uint16_t);			// t35
-	groupsize += SIZEOF_EEDTENT(DevAddrDef);
-
-
-	if (memptr) {
-		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.brenum, sizeof(atbaudrateenum), eedten_uart_baudrate, 1);
-		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.parity, sizeof(atparitydef), eedten_uart_parity, 1);
-		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.txdelayl, sizeof(atuarttodef), eedten_uart_txdelay, 1);
-		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.timeoutl, sizeof(atuarttodef), eedten_uart_timeout, 1);
-		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.t35, sizeof(uint16_t), eedten_uart_t35, 1);
-		eepopoulate_datamem(memptr, (uint8_t *) &boardio.uartee.devaddr, sizeof(DevAddrDef), eedten_uart_address, 1);
-	}
-	return groupsize;
-}
-
-
-/***************************************************************************
-* Populate data to 'powman' group created in memory
-* [17/06/2015]
-***************************************************************************/
-eegrpsizeDef eegrpcreate_powman(MCUEEARGDEF_GRPFUNC) {
-	eegrpsizeDef	groupsize;
-
-
-	groupsize = SIZEOF_EEDTENT(MXpower.cfg.thadc3v2);
-	if (memptr) {
-		eepopoulate_datamem(memptr, (uint8_t *) &MXpower.cfg.thadc3v2, sizeof(MXpower.cfg.thadc3v2), eedten_powman_thadc3v2, 1);
-	}
-	return groupsize;
-}
-
-
-/***************************************************************************
-* Populate data to 'board' group created in memory
-* [15/06/2015]
-***************************************************************************/
-eegrpsizeDef eegrpcreate_board(MCUEEARGDEF_GRPFUNC) {
-	eegrpsizeDef	groupsize = 0;
-
-
-	if (boardio.diptr) {
-		groupsize += (boardio.diptr->count * (
-				SIZEOF_EEDTENT(boardio.diptr->mode[0]) +
-				SIZEOF_EEDTENT(boardio.diptr->filterconst[0])));
-	}
-	if (boardio.doptr) {
-		groupsize += (boardio.doptr->count * (
-				SIZEOF_EEDTENT(boardio.doptr->mode[0]) +
-				SIZEOF_EEDTENT(boardio.doptr->pulsedur[0])));
-	}
-	if (groupsize && memptr) {
-		if (boardio.diptr) {
-			eepopoulate_datamem(memptr, (uint8_t *) boardio.diptr->mode, sizeof(boardio.diptr->mode[0]), eedten_board_dimode00, boardio.diptr->count);
-			eepopoulate_datamem(memptr, (uint8_t *) boardio.diptr->filterconst, sizeof(boardio.diptr->filterconst[0]), eedten_board_diflt00, boardio.diptr->count);
-		}
-		if (boardio.doptr) {
-			eepopoulate_datamem(memptr, (uint8_t *) boardio.doptr->mode, sizeof(boardio.doptr->mode[0]), eedten_board_domode00, boardio.doptr->count);
-			eepopoulate_datamem(memptr, (uint8_t *) boardio.doptr->pulsedur, sizeof(boardio.doptr->pulsedur[0]), eedten_board_dopul00, boardio.doptr->count);
-		}
-	}
-	return groupsize;
-}
-
-
-/***************************************************************************
-* Populate data entry created in memory
-* [15/06/2015]
-***************************************************************************/
-void eepopoulate_datamem(uint8_t **memptr, uint8_t *wrdata, uint8_t size, uint8_t basedten, uint8_t count) {
-	uint8_t			cnt;
-
-
-	for (cnt = 0; cnt < count; cnt++) {
-		((mcueedthead *) *memptr)->type = basedten + cnt;
-		((mcueedthead *) *memptr)->size = size;
-		*memptr += sizeof(mcueedthead);
-
-
-		(*memptr)[0] = wrdata[cnt * size];
-		if (size > 1) (*memptr)[1] = wrdata[(cnt * size) + 1];
-		if (size > 2) {
-			(*memptr)[2] = wrdata[(cnt * size) + 2];
-			(*memptr)[3] = wrdata[(cnt * size) + 3];
-		}
-		*memptr += size;
-	}
-}
-
-
-/***************************************************************************
-* Write group header to EEPROM
-* [16/06/2015]
-***************************************************************************/
-void eepopoulate_grouphead(uint8_t **memptr, mcueegrpenum groupid, uint16_t size) {
-
-
-	((mcueegrphead *) *memptr)->id = groupid;
-	((mcueegrphead *) *memptr)->size = size;
-	*memptr += sizeof(mcueegrphead);
-}
-
-
-/***************************************************************************
-* Check CRC of the EEPROM configuration
-* [18/06/2015]
-***************************************************************************/
-uint8_t eeconf_crc(uint8_t updatecrc) {
-	uint16_t			cnt;
-	uint8_t 			rdbyte;
-	uint16_t 			calccrc = 0xFFFF;
-	uint16_t 			eecrc;
-	eecfgsizeDef		configsize;
-
-
-	configsize = eeprom_read_word((uint16_t *) (sizeof(mcueeheader) - sizeof(eecfgsizeDef)));
-
-
-	for (cnt = 0; cnt < configsize; cnt++) {
-		rdbyte = eeprom_read_byte((uint8_t *) cnt);
-		buildCRC16(&calccrc, rdbyte);
-	}
-
-
-	if (updatecrc) {
-		eeprom_write_word((uint16_t *) configsize, calccrc);		// Append CRC at the end of the configuration
-		return EXIT_SUCCESS;							// We just updated CRC so surely it is correct :)
-	}
-	else{
-		eecrc = eeprom_read_word((uint16_t *) configsize);	// Read CRC from EEPROM
-		if (calccrc == eecrc) return EXIT_SUCCESS;		// Correct CRC
-	}
-	return EXIT_FAILURE;								// Incorrect CRC
-}
-
-
-/***************************************************************************
-* Resolve EEPROM group identifier from Modbus register
-* [15/06/2015]
-* Fixed: Exclude DO register when resolving EEPROM group
-* Data validation added
-* [17/08/2015]
-***************************************************************************/
-mcueegrpenum eegroupid_resolve(atmappingenum mapreg, ModData16bitDef val, uint8_t *existsincfg) {
-
-	if (existsincfg) *existsincfg = 1;
-
-
-	if (
-			(mapreg >= atmapen_dimode00) &&
-			(mapreg <= atmapen_dimode0F)) {
-		if ((val < modbusdimden_spi) || (val > modbusdimden_spi)) goto failed;
-		return eegren_board;
-	}
-
-
-	else if (
-			(mapreg >= atmapen_domode00) &&
-			(mapreg <= atmapen_domode0F)) {
-		if ((val < modbusdomden_pulseout) || (val > modbusdomden_pulseout)) goto failed;
-		return eegren_board;
-	}
-
-
-	else if (
-			(mapreg >= atmapen_dif00) &&
-			(mapreg <= atmapen_dif0F)) {
-		if (val < 1) goto failed;
-		return eegren_board;
-	}
-
-
-	else if (
-			(mapreg >= atmapen_dopul00) &&
-			(mapreg <= atmapen_dopul0F)) {
-		if (val < 1) goto failed;
-		return eegren_board;
-	}
-
-
-	else if (mapreg == atmapen_3v2th) {
-		return eegren_powman;
-	}
-
-
-	else if (
-			(mapreg >= atmapen_baudrate) &&
-			(mapreg <= atmapen_devaddr)) {
-		if (uartsettvalidate(mapreg, val) == EXIT_FAILURE) goto failed;
-		return eegren_uart0;
-	}
-
-	// TODO resolve other groups
-	else {
-		if (existsincfg) *existsincfg = 0;	// Mapped register is not part of EEPROM configuration
-	}
-
-
-	failed:
-	return 0;	//  Mapped register is not part of EEPROM configuration or data validation failed
 }

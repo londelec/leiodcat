@@ -2,11 +2,14 @@
 ============================================================================
  Name        : Modbussl.h
  Author      : AK
- Version     : V1.02
+ Version     : V1.03
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for Modbus ASCII/RTU/TCP communication protocol slave module
 
-  Change log  :
+  Change log :
+
+  *********V1.03 07/09/2016**************
+  Local function prototypes removed
 
   *********V1.02 18/08/2015**************
   Mapping write data pointer is 16bit pointer
@@ -27,9 +30,6 @@
 #include <stdint.h>
 
 #include "ledefs.h"
-//#include "main.h"
-//#include "lecommands.h"
-//#include "realtime.h"
 #include "modbusdef.h"
 
 
@@ -52,83 +52,6 @@
 #define	LOGMBFLAG_CMDINFO				0x08			// Record control command error and info messages to Event file
 
 
-
-
-/*typedef struct Modbusma_objmsglink_ {
-	uint16_t				bitoffset;					// Bit offset {16}
-	ObjectTypeEnum			objtype;					// Object type {8}
-	void					*private;					// Private object pointer {32}
-	struct Modbusma_objmsglink_ *next;					// Next chain object {32}
-} LEOPACK Modbusma_objmsglink;
-
-
-typedef struct Modbusma_DIprivate_ {
-	RealtimeDI				*rtDI;						// Realtime object pointer {32}
-	Qual_8bit				qualifier;					// Internal qualifier {8}
-} LEOPACK Modbusma_DIprivate;
-
-
-typedef struct Modbusma_AIprivate_ {
-	IECCoeffDef				coeff;						// Coefficient {32}
-	AIthresholdStr			thresholds;					// Deadband {32} and Percent {32}
-	AIscalingStr			*scaling;					// Scaling structure pointer {32}
-	RealtimeAI				*rtAI;						// Realtime object pointer {32}
-	Qual_8bit				qualifier;					// Internal qualifier {8}
-} LEOPACK Modbusma_AIprivate;
-
-
-typedef struct Modbusma_CTprivate_ {
-	InfAddrDef				infaddr;					// Information address {32}
-	IECCounterDef			deadband;					// Deadband {32}
-	RealtimeCT				*rtCT;						// Realtime object pointer {32}
-	Qual_8bit				qualifier;					// Internal qualifier {8}
-} LEOPACK Modbusma_CTprivate;
-
-
-typedef struct Modbusma_DOprivate_ {
-	struct Modbusmsg_		*message;					// Request message {32}
-	uint16_t				bitoffset;					// Bit offset {16}
-	Qual_8bit				qualifier;					// Internal qualifier {8}
-} LEOPACK Modbusma_DOprivate;
-
-
-typedef struct Modbusma_AOprivate_ {
-	struct Modbusmsg_		*message;					// Request message {32}
-	IECCoeffDef				coeff;						// Coefficient {32}
-	Qual_8bit				qualifier;					// Internal qualifier {8}
-} LEOPACK Modbusma_AOprivate;
-
-
-typedef struct Modbusma_control_ {
-	NanoTimeDef				cmdtimer;					// DO/AO command expiration timer {64 or even 128}
-	struct Modbusmsg_		*message;					// Request message {32}
-	IECFloatDef				setpoint;					// Original Setpoint object value {32}
-	ObjectCntDef			index;						// Object index {32}
-	uint16_t				bitoffset;					// Bit offset {16}
-	cmdstMasterEnum			state;						// DO command execution state {8}
-} Modbusma_control;
-
-
-typedef struct Modbusmalinks_ {
-	Modbusma_objmsglink		*DIlinks;					// DI object XML links
-	Modbusma_objmsglink		*AIlinks;					// AI object XML links
-	Modbusma_objmsglink		*CTlinks;					// CT object XML links
-	Modbusma_objmsglink		*DOlinks;					// DO object XML links
-	Modbusma_objmsglink		*AOlinks;					// AO object XML links
-} Modbusmalinks;
-
-
-typedef struct Modbusmsg_ {
-	//uint8_t					priority;					// Modbus message priority
-	//TimerConstDef			interval;					// Message sending interval
-	//NanoTimeDef				msgtimer;					// Message timer value, generate message after expiration
-	ModFuncDef				func;						// Modbus function
-	uint8_t					datlength;					// Outgoing data length
-	uint8_t					*data;						// Outgoing data buffer
-	Modbusma_objmsglink		*objlink;					// First linked object pointer
-	struct Modbusmsg_		*next;						// Next Modbus message
-} Modbusmsg;
-*/
 
 
 typedef struct ModbusRegStr_ {
@@ -169,24 +92,9 @@ typedef struct Modbussl_applayer_ {
 } Modbussl_applayer;
 
 
-
-
-
-// Version string made public to allow access from main
-//extern const lechar *ModbusslVersion;
-
-
+uint8_t Modbussl_appprocess(Modbussl_applayer *applayer, uint8_t *rxtxbuff);
 Modbussl_applayer *Modbussl_preappinit(void);
 void Modbussl_postappinit(Modbussl_applayer *applayer, uint8_t mapsize);
-void Modbussl_regmeminit(Modbussl_applayer *applayer, uint8_t mapsize);
-uint8_t Modbussl_appprocess(Modbussl_applayer *applayer, uint8_t *rxtxbuff);
-uint8_t Modbussl_rdslaveid(uint8_t *txbuff);
-uint8_t Modbussl_searchreg(Modbussl_applayer *applayer, ModReg16bitDef regaddr, uint16_t *memoffset);
-uint8_t Modbussl_validregcnt(Modbussl_applayer *applayer, ModReg16bitDef regaddr, ModReg16bitDef regcount, uint16_t memoffset);
-
-uint8_t Modbussl_message(uint8_t *txbuff, ModbusRegStr *regptr, uint8_t count);
-uint8_t Modbussl_eeblock(uint8_t *txbuff, ModReg16bitDef reg, uint8_t count);
-uint8_t Modbussl_exception(uint8_t *txbuff, ModData8bitDef excpt);
 
 
 #endif /* MODBUSSL_H_ */

@@ -2,11 +2,14 @@
  ============================================================================
  Name        : powman.c
  Author      : AK
- Version     : V1.03
+ Version     : V1.04
  Copyright   : Property of Londelec UK Ltd
  Description : Power management for MX28 board
 
   Change log :
+
+  *********V1.04 07/09/2016**************
+  MX board flag created
 
   *********V1.03 09/04/2016**************
   Interrupt levels defined in irq.h now
@@ -34,7 +37,7 @@
 
 
 #include "ledefs.h"
-#include "main.h"
+#include "leiodcat.h"
 #include "powman.h"
 #include "irq.h"
 #include "mcueecfg.h"
@@ -45,6 +48,7 @@
 #define DEBUG_IGNORE_VDDIO
 #define DEBUG_NOIDLECNT
 #define DEBUG_IGNORE_HBHIGH
+//#define DEBUG_BOARD_V10
 #endif	// GLOBAL_DEBUG
 
 
@@ -75,10 +79,11 @@ MXpowStr MXpower;
 * [19/08/2015]
 * Heartbeat pin interrupt level defined in irq.h now
 * [09/04/2016]
+* MX board flag created
+* [07/09/2016]
 ***************************************************************************/
-void powman_init() {
+void powman_init(void) {
 	uint32_t			eedword;
-	//uint8_t				cnt;
 
 
 	memset(&MXpower, 0, sizeof(MXpower));				// Clean powman structure
@@ -86,9 +91,9 @@ void powman_init() {
 	POWMANF_SET_MTIMER(POW_STARTUP_DELAY)				// Set 3V8 enable delay constant
 
 
-	switch (BoardHardware) {
-	/*case somerevision:
-		break;*/
+	/*switch (MainLeiodc.hw) {
+	case somerevision:
+		break;
 
 	case athwenat3100v11:
 		BOARD_VDDIOCH.MUXCTRL = ADC_CH_MUXPOS_PIN1_gc;	// PORTA pin 1 selected
@@ -111,10 +116,32 @@ void powman_init() {
 		MXpower.cfg.pin3v8gate = PIN5_bm;				// 3V8_POWER_GATE
 		MXpower.cfg.pinpowsw = PIN7_bm;					// POWERON_GATE
 		break;
+	}*/
+
+
+#ifdef DEBUG_BOARD_V10
+	BOARD_VDDIOCH.MUXCTRL = ADC_CH_MUXPOS_PIN6_gc;	// PORTA pin 6 selected
+	MXpower.cfg.pinhbin = 0;						// Not used
+	MXpower.cfg.pin3v3gate = PIN4_bm;				// 3V3_POWER_GATE
+	MXpower.cfg.pin3v8gate = PIN5_bm;				// 3V8_POWER_GATE
+	MXpower.cfg.pinpowsw = PIN7_bm;					// POWERON_GATE
+#else
+	if (MainLeiodc.hw & ATHWF_MXBOARD) {
+		BOARD_VDDIOCH.MUXCTRL = ADC_CH_MUXPOS_PIN1_gc;	// PORTA pin 1 selected
+		MXpower.cfg.pinhbin = PIN0_bm;					// MB_SSP3_MISO
+		MXpower.cfg.pin3v3gate = PIN4_bm;				// 3V3_POWER_GATE
+		MXpower.cfg.pin3v8gate = PIN5_bm;				// 3V8_POWER_GATE
+		MXpower.cfg.pinpowsw = PIN7_bm;					// POWERON_GATE
 	}
+	else {
+		BOARD_VDDIOCH.MUXCTRL = ADC_CH_MUXPOS_PIN1_gc;	// PORTA pin 1 selected
+		MXpower.cfg.pinhbout = PIN0_bm;					// MB_SSP3_MISO
+		MXpower.state = powst_idle;
+	}
+#endif
 
 
-	if (eeconf_get(eegren_powman, eedten_powman_thadc3v2, &eedword) == EXIT_SUCCESS) {
+	if (eeconf_get(eegren_powman, eedten_powman_thadc3v2, &eedword, NULL) == LE_OK) {
 		MXpower.cfg.thadc3v2 = eedword;
 	}
 	else {
@@ -183,13 +210,13 @@ void powman_init() {
  *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
  *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
  *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<*/
-uint8_t powman_mainproc() {
+uint8_t powman_mainproc(void) {
 	uint16_t	adcvalue;
 
 
 	switch (MXpower.state) {
 	case powst_init:
-		if (POWMANF_CHECK_MTIMER == EXIT_SUCCESS) {
+		if (POWMANF_CHECK_MTIMER == LE_OK) {
 			POWER_GATE_3V8_ON		// Turn on MX28 board supply 3V8
 			MXpower.state = powst_actpowswitch;
 			POWMANF_SET_MTIMER(POW_SWITCHON_DELAY)	// Set Power ON Switch delay
@@ -199,7 +226,7 @@ uint8_t powman_mainproc() {
 
 
 	case powst_actpowswitch:
-		if (POWMANF_CHECK_MTIMER == EXIT_SUCCESS) {
+		if (POWMANF_CHECK_MTIMER == LE_OK) {
 			POWER_SWITCH_ACT		// Activate MX28 power switch
 			MXpower.state = powst_relpowswitch;
 			POWMANF_SET_MTIMER(POW_SWITCH_DURATION)	// Set power switch duration
@@ -208,7 +235,7 @@ uint8_t powman_mainproc() {
 
 
 	case powst_relpowswitch:
-		if (POWMANF_CHECK_MTIMER == EXIT_SUCCESS) {
+		if (POWMANF_CHECK_MTIMER == LE_OK) {
 			POWER_SWITCH_REL		// Release MX28 power switch
 			MXpower.state = powst_checkhb;
 			POWMANF_SET_MTIMER(POW_T1MSEC)			// Set heartbeat checking interval = 1msec
@@ -219,7 +246,7 @@ uint8_t powman_mainproc() {
 
 
 	case powst_checkhb:
-		if (POWMANF_CHECK_MTIMER == EXIT_SUCCESS) {
+		if (POWMANF_CHECK_MTIMER == LE_OK) {
 			POWMANF_SET_MTIMER(POW_T1MSEC)			// Set heartbeat checking interval = 1msec
 			if (boardio.ctrlport->IN & MXpower.cfg.pinhbin) {	// Heartbeat pin must be high
 				MXpower.poscnt++;
@@ -256,7 +283,7 @@ uint8_t powman_mainproc() {
 
 
 	case powst_waitmx3V3:
-		if (POWMANF_CHECK_MTIMER == EXIT_SUCCESS) {
+		if (POWMANF_CHECK_MTIMER == LE_OK) {
 			POWMANF_SET_MTIMER(POW_T1MSEC)		// Set ADC checking interval = 1msec
 			adcvalue = BOARD_VDDIOCH.RES;
 			if (
@@ -297,7 +324,7 @@ uint8_t powman_mainproc() {
 
 
 	case powst_idle:
-		if (POWMANF_CHECK_MTIMER == EXIT_SUCCESS) {
+		if (POWMANF_CHECK_MTIMER == LE_OK) {
 			if (MXpower.cfg.pinpowsw) {		// Check ADC and idle counter if power switch pin is defined
 #ifndef DEBUG_IGNORE_VDDIO
 				adcvalue = BOARD_VDDIOCH.RES;
@@ -309,14 +336,14 @@ uint8_t powman_mainproc() {
 					if (MXpower.idlecnt) MXpower.idlecnt--;
 					if (MXpower.idlecnt)
 #endif	// DEBUG NOIDLECNT
-						return EXIT_SUCCESS;
+						return LE_OK;
 				}
 				POWMANF_DISABLE_OUTPUTS	// Disable other output pins
 				POWER_GATE_3V3_OFF		// Turn off peripheral power 3V3
 				POWER_GATE_3V8_OFF		// Turn off MX28 board supply 3V8
 				POWMANF_SET_MTIMER(POW_REPOWER_DELAY);	// Delay before new power cycle
 				MXpower.state = powst_init;
-				return EXIT_FAILURE;
+				return LE_FAIL;
 #endif	// DEBUG IGNORE VDDIO
 			}
 			else if (MXpower.cfg.pinhbout) {	// Heartbeat output pin is defined
@@ -330,17 +357,15 @@ uint8_t powman_mainproc() {
 				}
 			}
 		}
-		return EXIT_SUCCESS;
+		return LE_OK;
 		//break;
 
 
 	default:
 		break;
 	}
-	return EXIT_FAILURE;
+	return LE_FAIL;
 }
-
-
 
 
 /***************************************************************************

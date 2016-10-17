@@ -2,11 +2,15 @@
 ============================================================================
  Name        : mcueecfg.h
  Author      : AK
- Version     : V2.01
+ Version     : V2.02
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for MCU EEPROM configuration structures
 
-  Change log  :
+  Change log :
+
+  *********V2.02 07/09/2016**************
+  Local function prototypes removed
+  UART interface type added
 
   *********V2.01 18/08/2015**************
   Group data prepare function pointers are now stored and called from table
@@ -71,10 +75,6 @@
 		meedname = {MCUEECFG_CONCAT4(eedten_, mgname, _, mdname), sizeof(eepromcfg.meedname.value), mvalue},
 
 
-// Macro for argument definitions
-#define MCUEEARGDEF_GRPFUNC uint8_t **memptr
-
-
 // EEPROM specific type definitions
 typedef	uint16_t						eecfgsizeDef;		/* EEPROM configuration size definition */
 typedef	uint16_t						eegrpsizeDef;		/* EEPROM group size definition */
@@ -116,6 +116,7 @@ typedef enum {
 	eedten_uart_timeout				= 4,				// Timeout in 100x microseconds
 	eedten_uart_t35					= 5,				// T35 timeout in 100x microseconds
 	eedten_uart_address				= 6,				// Device address
+	eedten_uart_iface				= 7,				// Interface RS232/485/422
 	eedten_uart_undefined			= 0xFF				// Undefined
 } LEOPACK mcueeduartenum;
 
@@ -203,23 +204,7 @@ typedef struct mcueeheader_ {
 } mcueeheader;
 
 
-typedef struct mcueegrphead_ {
-	mcueegrpenum			id;							// Group ID (UART, Powman, etc)
-	eegrpsizeDef			size;						// Group size excluding group header
-} mcueegrphead;
-
-
-typedef struct mcueedthead_ {							// Data header
-	EEDATA_HEADER										// Data type (enum) and size - byte, word, dword
-} mcueedthead;
-
-
-typedef struct mcueecbtablestr_ {
-	mcueegrpenum			id;							// Group ID (UART, Powman, etc)
-	eegrpsizeDef			(*createfunc)(MCUEEARGDEF_GRPFUNC);	// Function that creates group and populates data
-} mcueecbtablestr;
-
-
+/*
 EEDTSTR_DEFINE(eeuartbaudrate,	uint16_t)				// UART baudrate
 EEDTSTR_DEFINE(eeuartparity,	atparitydef)			// UART parity, data bits, stop bit
 EEDTSTR_DEFINE(eeuarttxdelay,	atuarttodef)			// UART Tx delay in 100x microseconds
@@ -235,6 +220,7 @@ EEDTSTR_DEFINE(eeboarddimode,	uint16_t)				// DI mode
 EEDTSTR_DEFINE(eeboarddiflt,	uint16_t)				// DI filter
 EEDTSTR_DEFINE(eeboarddomode,	uint16_t)				// DO mode
 EEDTSTR_DEFINE(eeboarddopul,	uint16_t)				// DO pulse duration
+*/
 
 
 // EEPROM to register memory map table structure
@@ -244,23 +230,12 @@ EEDTSTR_DEFINE(eeboarddopul,	uint16_t)				// DO pulse duration
 } eemapregTblStr;*/
 
 
-uint8_t eeconf_get(mcueegrpenum groupid, uint8_t dataid, uint32_t *rddword);
-uint8_t eeconf_validate(atmappingenum mapreg, ModData16bitDef val, uint8_t *updatereq);
-void eeconf_update(ModbusRegStr *regmem);
-void eeconf_restructure();
-
-leptr eesearch_group(mcueegrpenum groupid, eegrpsizeDef *groupsize, leptr *nextavail);
-leptr eesearch_data(uint8_t dataid, leptr groupptr, eegrpsizeDef groupsize, uint32_t *rddword);
-void eeread_data(leptr eeadr, uint32_t *rddword, uint8_t size);
-void eewrite_data(leptr eeadr, uint32_t wrdword, uint8_t size);
-eegrpsizeDef eegrpfunc(mcueegrpenum groupid, uint8_t **memptr);
-eegrpsizeDef eegrpcreate_uart(MCUEEARGDEF_GRPFUNC);
-eegrpsizeDef eegrpcreate_powman(MCUEEARGDEF_GRPFUNC);
-eegrpsizeDef eegrpcreate_board(MCUEEARGDEF_GRPFUNC);
-void eepopoulate_datamem(uint8_t **memptr, uint8_t *wrdata, uint8_t size, uint8_t basedten, uint8_t count);
-void eepopoulate_grouphead(uint8_t **memptr, mcueegrpenum groupid, uint16_t size);
+mcueegrpenum eedata_validate(atmappingenum mapreg, ModData16bitDef val, uint8_t *valid);
 uint8_t eeconf_crc(uint8_t updatecrc);
-mcueegrpenum eegroupid_resolve(atmappingenum mapreg, ModData16bitDef val, uint8_t *existsincfg);
+uint8_t eeconf_get(mcueegrpenum groupid, uint8_t dataid, uint32_t *rddword, uint8_t *requpd);
+uint8_t eegroup_validate(mcueegrpenum groupid);
+void eeconf_update(ModbusRegStr *regmem);
+void eeconf_restructure(void);
 
 
 #endif /* MCUEECFG_H_ */

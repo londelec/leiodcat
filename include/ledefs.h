@@ -2,11 +2,20 @@
  ============================================================================
  Name        : ledefs.h
  Author      : AK
- Version     : V1.09
+ Version     : V1.12
  Copyright   : Property of Londelec UK Ltd
  Description : Global header file for Londelec C/C++ projects
 
   Change log :
+
+  *********V1.12 28/07/2016**************
+  Internet port and file mode definition added
+
+  *********V1.11 25/07/2016**************
+  Clock monotonic is defined here only if not already defined in time.h
+
+  *********V1.10 11/05/2016**************
+  leserialdef, direntdef, dirdef, filedef, leuid, ledid definitions added
 
   *********V1.09 04/10/2015**************
   lseek offset definition added
@@ -54,12 +63,9 @@
 #ifndef MCUTYPE
 #include <sys/un.h>			// Unix socket
 #include <netdb.h>			// Socket structures
+#include <dirent.h>			// Directory structures
 #include <time.h>			// localtime
 #endif	// MCUTYPE
-
-
-#define FALSE 0
-#define TRUE 1
 
 
 #ifndef EXIT_SUCCESS
@@ -76,6 +82,14 @@
 #define	DAYINSEC						86400			// Day in seconds
 #define SECINNSEC						1000000000		// Second in nanoseconds
 #define MSECINNSEC						1000000			// Milisecond in nanoseconds
+
+// Function return status
+#define LE_OK 							0
+#define LE_FAIL 						1
+
+// Boolean
+#define LE_FALSE						0
+#define LE_TRUE							1
 
 
 // Force compiler to use min number of bytes for
@@ -99,7 +113,9 @@
 #ifdef MOXA_W3X5A
 #define CLOCK_MONOTONIC					0		// Moxa's W325A kernel doesn't have Monotonic clock
 #else
+#ifndef CLOCK_MONOTONIC
 #define CLOCK_MONOTONIC					1
+#endif
 #endif
 
 
@@ -117,7 +133,7 @@ typedef	struct if_nameindex			ifnameixdef;		/* Interface name index definition *
 typedef	struct ifreq				ifreqdef;			/* Interface IO parameters definition */
 typedef	unsigned int				ifixdef;			/* Interface index size definition */
 typedef	int							fddef;				/* File descriptor size definition */
-typedef	int							errnodef;			/* Error Number definition */
+typedef	int							errndef;			/* Error Number definition */
 typedef	char						lechar;				/* Character size definition */
 typedef	uintptr_t					leptr;				/* Pointer size definition */
 typedef	float						lefloat;			/* Short floating point size definition */
@@ -126,7 +142,10 @@ typedef	struct timeval				unixtimedef;		/* Unix time (sec and microsecs) structu
 typedef	ssize_t						rxbytesdef;			/* recv/read/send function return size definition */
 typedef	ssize_t						retssizedef;		/* function return size definition */
 typedef	in_addr_t					ipv4addrdef;		/* IPv4 address definition */
+typedef	in_port_t					inportdef;			/* Internet address port size definition */
 typedef	__pid_t						lepid;				/* Process identifier size definition */
+typedef	__uid_t						leuid;				/* User identifier size definition */
+typedef	__gid_t						legid;				/* Group identifier size definition */
 typedef	pthread_t					lethread;			/* Thread identifier size definition */
 typedef fd_set						lefdset;			/* Directly accessible bit set */
 typedef __time_t					leunixsec;			/* Unix second definition */
@@ -134,9 +153,14 @@ typedef uint32_t					leepochsec;			/* Londelec defined 32bit unsigned seconds si
 typedef uint64_t					leepoch64sec;		/* Londelec defined 64bit seconds since epoch */
 typedef uint16_t					lemsecdef;			/* Milisecond size definition */
 typedef __off_t						leofft;				/* lseek offset size definition */
+typedef	DIR							dirdef;				/* directory stream objects definition */
+typedef	FILE						filedef;			/* IO file definition */
+typedef	mode_t						modedef;			/* File mode definition */
 typedef	struct stat 				filestatdef;		/* file status structure definition */
 typedef	struct statvfs				vfsstatdef;			/* Virtual file system status structure definition */
 typedef	struct pcap_pkthdr			pcaphdrdef;			/* pcap header structure definition */
+typedef	struct serial_struct		leserialdef;		/* linux kernel serial structure definition */
+typedef	struct dirent				direntdef;			/* directory entry structure definition */
 #endif	// MCUTYPE
 
 
@@ -159,6 +183,7 @@ typedef	uint16_t					leflags16bit;		/* Internal flag size definition */
 #define BOOL_CHECK(b)				(b ? 1 : 0)
 
 #define BYTE_ISNUM(mbyte) 			(((mbyte) >= 0x30) && ((mbyte) <= 0x39))
+#define BYTE_ISCRLF(mbyte) 			(((mbyte) == '\r') || ((mbyte) == '\n'))
 // Convert ASCII to decimal
 #define ASCIIDEC_MACRO(mdec, mascii)\
 		mdec *= 10;\

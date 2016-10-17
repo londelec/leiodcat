@@ -2,11 +2,14 @@
 ============================================================================
  Name        : Modbus.h
  Author      : AK
- Version     : V1.01
+ Version     : V1.02
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for Modbus RTU communication protocol link layer module
 
-  Change log  :
+  Change log :
+
+  *********V1.02 08/09/2016**************
+  Local function prototypes removed
 
   *********V1.01 24/08/2015**************
   Automatic t35 timeout calculation constant added
@@ -23,7 +26,7 @@
 
 #include <stdint.h>
 
-#include "main.h"
+#include "leiodcat.h"
 #include "modbusdef.h"
 #include "modbussl.h"
 
@@ -98,22 +101,8 @@ typedef struct Modbussl_pointers_ {
 } Modbussl_pointers;
 
 
-
-
-
-
-// Version string made public to allow access from main
-//extern const lechar *ModbusVersion;
-
-void Modbussl_preinit(GenProtocolStr *genprotocol, DevAddrDef devaddr);
-Modbus_shared_linklayer *Modbus_initshared(StatStr *currentsta);
-uint8_t Modbussl_postinit(GenProtocolStr *genprotocol, TimerConstDef t35, uint8_t mapsize);
-
-CHStateEnum Modbus_receive(DRVARGDEF_RX);
-void buildCRC16 (uint16_t *crc, uint8_t databyte);
-CHStateEnum Modbussl_analyze(StatStr *staptr);
-
-void Modbussl_commserr(DRVARGDEF_COMMSERR);
-CHStateEnum Modbussl_process(DRVARGDEF_MAINPROC);
+void buildCRC16(uint16_t *crc, uint8_t databyte);
+void Modbussl_preinit(GenProtocolStr *gprot, DevAddrDef devaddr);
+uint8_t Modbussl_postinit(GenProtocolStr *gprot, TimerConstDef t35, uint8_t mapsize);
 
 #endif /* MODBUS_H_ */

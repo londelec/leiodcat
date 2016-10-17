@@ -6,7 +6,7 @@
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for power management for MX28 board
 
-  Change log  :
+  Change log :
 
   *********V1.01 18/08/2015**************
   Heartbeat output pin created
@@ -96,8 +96,8 @@ typedef struct MXpowStr_ {
 extern MXpowStr MXpower;
 
 
-void powman_init();
-uint8_t powman_mainproc();
+void powman_init(void);
+uint8_t powman_mainproc(void);
 
 
 #endif /* POWMAN_H_ */
