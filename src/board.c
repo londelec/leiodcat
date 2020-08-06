@@ -2,11 +2,14 @@
  ============================================================================
  Name        : board.c
  Author      : AK
- Version     : V1.04
+ Version     : V1.05
  Copyright   : Property of Londelec UK Ltd
  Description : board hardware module
 
   Change log :
+
+  *********V1.05 01/06/2018**************
+  IO=0040 module and SPI interrupt added
 
   *********V1.04 07/09/2016**************
   Fixed: Last temperature value used correctly
@@ -45,6 +48,7 @@
 #include <avr/eeprom.h>
 
 #include "board.h"
+//#include "irq.h"
 #include "leiodcat.h"
 #include "timer.h"
 #include "74lv8153.h"
@@ -55,6 +59,7 @@
 //#define DEBUG_NOEE
 //#define DEBUG_NOLEDDRV
 //#define DEBUG_LEDUPDATE
+//#define DEBUG_EECRC_SHOW
 #endif	// GLOBAL_DEBUG
 
 
@@ -67,35 +72,41 @@
 #define VPORT_BASE 					VPORT0
 
 
-boardstr boardio;
+board_t boardio;
 
+// External functions
+void boardisr_1ms(void);
+extern void spidrv_mainproc(void);
+extern void spi_init(uint8_t aicount);
 
 
 // Offset and mask calculation for IO selection
-#define	CALCULATE_REGOFFSET(mioptr, mindex) ((mioptr->bitoffset[mindex] & 0x18) >> 3)
-#define	CALCULATE_VPORTPTR(mioptr, mindex)	&VPORT_BASE + CALCULATE_REGOFFSET(mioptr, mindex)
-#define	CALCULATE_BITMASK(mioptr, mindex)	(1 << (mioptr->bitoffset[mindex] & 0x07))
+#define CALCULATE_REGOFFSET(mioptr, mindex) ((mioptr->bitoffset[mindex] & 0x18) >> 3)
+#define CALCULATE_VPORTPTR(mioptr, mindex)	&VPORT_BASE + CALCULATE_REGOFFSET(mioptr, mindex)
+#define CALCULATE_BITMASK(mioptr, mindex)	(1 << (mioptr->bitoffset[mindex] & 0x07))
 
 
 // PIN manipulation macros
 #define LED_CONTROL_PIN_ON	if (boardio.ledoepin) boardio.ctrlport->OUTCLR = boardio.ledoepin;
 
 
-typedef struct boardhwtabstr_  {
-	athwenum				type;
+typedef struct boardhwtab_s  {
+	athw_e					type;
 	uint8_t					dicount;
 	uint8_t					docount;
 	uint8_t					dioffs;
 	uint8_t					dooffs;
-} boardhwtabstr;
+	uint8_t					aicount;
+} boardhwtab_t;
 
-const boardhwtabstr boardhwtable[] PROGMEM = {
-	{athwenundefined, 	12, 	4, 		0, 		0x0C},
-	{athwenmx3100v11,	12,		4,		0, 		0x0C},
-	{athwenat3100v11,	12,		4, 		0, 		0x0C},
-	{athwenat2200v10,	8,		8, 		0, 		0x08},
-	{athwenat4000v10,	16,		0, 		0, 		0},
-	{athwenat0400v10,	0,		16, 	0, 		0},
+const boardhwtab_t boardhwtable[] PROGMEM = {
+	{athwenundefined, 	12, 	4, 		0, 		0x0C,	0},
+	{athwenmx3100v11,	12,		4,		0, 		0x0C, 	0},
+	{athwenat3100v11,	12,		4, 		0, 		0x0C, 	0},
+	{athwenat2200v10,	8,		8, 		0, 		0x08, 	0},
+	{athwenat4000v10,	16,		0, 		0, 		0,		0},
+	{athwenat0400v10,	0,		16, 	0, 		0, 		0},
+	{athwenat0040v10,	0,		0, 		0, 		0, 		8},
 };
 
 
@@ -109,8 +120,8 @@ const boardhwtabstr boardhwtable[] PROGMEM = {
 ***************************************************************************/
 inline void boardisr_1ms(void) {
 	uint8_t				cnt;
-	boardDIstr			*diptr = boardio.diptr;
-	boardDOstr			*doptr = boardio.doptr;
+	boardDI_t			*diptr = boardio.diptr;
+	boardDO_t			*doptr = boardio.doptr;
 	VPORT_t 			*vportptr;
 	uint16_t			statebit;
 	uint8_t 			dibit;
@@ -180,29 +191,30 @@ ISR(BADISR_vect) {
 #endif
 
 
-/***************************************************************************
-* Initialize digital inputs
-* [24/02/2015]
-* DI modes added
-* [12/06/2015]
-* DI and DO mode enums now defined in modbusdef.h
-* [19/08/2015]
-* Don't initialize structures if there are no DIs
-* [08/09/2016]
-***************************************************************************/
+/*
+ * Initialize digital inputs
+ * [24/02/2015]
+ * DI modes added
+ * [12/06/2015]
+ * DI and DO mode enums now defined in modbusdef.h
+ * [19/08/2015]
+ * Don't initialize structures if there are no DIs
+ * [08/09/2016]
+ * Configuration size variable added to board structure
+ * [05/08/2020]
+ */
 static void initboardDI(uint8_t dicount, uint8_t baseoffset) {
 	uint8_t				cnt;
 	uint32_t			eedword;
-	uint8_t				reqeeupdate = 0;
 
 
 	if (!dicount)
 		return;
 
-	boardio.diptr = calloc(1, sizeof(boardDIstr));
+	boardio.diptr = calloc(1, sizeof(boardDI_t));
 	boardio.diptr->count = dicount;
 	boardio.diptr->samples = calloc(dicount, sizeof(uint16_t));
-	boardio.diptr->mode = calloc(dicount, sizeof(modbusdimodeenum));
+	boardio.diptr->mode = calloc(dicount, sizeof(modbusdimode_e));
 	boardio.diptr->filterconst = calloc(dicount, sizeof(uint16_t));
 	boardio.diptr->bitoffset = calloc(dicount, sizeof(uint8_t));
 	//boardio.diptr->bitoffset = (uint8_t *) boardio.diptr->filterconst + (dicount * sizeof(uint16_t));
@@ -211,47 +223,42 @@ static void initboardDI(uint8_t dicount, uint8_t baseoffset) {
 	for (cnt = 0; cnt < dicount; cnt++) {
 		boardio.diptr->bitoffset[cnt] = (baseoffset + cnt);
 
-		if (eeconf_get(eegren_board, (eedten_board_dimode00 + cnt), &eedword, &reqeeupdate) == LE_OK) {
+		if (eeconf_get(eegren_board, (eedten_board_dimode00 + cnt), &eedword) == LE_OK)
 			boardio.diptr->mode[cnt] = eedword;
-		}
-		else {
+		else
 			boardio.diptr->mode[cnt] = modbusdimden_spi;
-		}
 
-		if (eeconf_get(eegren_board, (eedten_board_diflt00 + cnt), &eedword, &reqeeupdate) == LE_OK) {
+
+		if (eeconf_get(eegren_board, (eedten_board_diflt00 + cnt), &eedword) == LE_OK)
 			boardio.diptr->filterconst[cnt] = eedword;
-		}
-		else {
+		else
 			boardio.diptr->filterconst[cnt] = DI_DEFAULT_FILTER_MSEC;
-		}
 	}
-
-	if (reqeeupdate)	// EEPROM update required
-		boardio.eeupdatebs |= (1 << eegren_board);
 }
 
 
-/***************************************************************************
-* Initialize digital outputs
-* [24/02/2015]
-* DI and DO mode enums now defined in modbusdef.h
-* [19/08/2015]
-* Don't initialize structures if there are no DOs
-* [08/09/2016]
-***************************************************************************/
+/*
+ * Initialize digital outputs
+ * [24/02/2015]
+ * DI and DO mode enums now defined in modbusdef.h
+ * [19/08/2015]
+ * Don't initialize structures if there are no DOs
+ * [08/09/2016]
+ * Configuration size variable added to board structure
+ * [05/08/2020]
+ */
 static void initboardDO(uint8_t docount, uint8_t baseoffset) {
 	uint8_t				cnt;
 	uint32_t			eedword;
-	uint8_t				reqeeupdate = 0;
 
 
 	if (!docount)
 		return;
 
-	boardio.doptr = calloc(1, sizeof(boardDOstr));
+	boardio.doptr = calloc(1, sizeof(boardDO_t));
 	boardio.doptr->count = docount;
 	boardio.doptr->samples = calloc(docount, sizeof(uint16_t));
-	boardio.doptr->mode = calloc(docount, sizeof(modbusdomodeenum));
+	boardio.doptr->mode = calloc(docount, sizeof(modbusdomode_e));
 	boardio.doptr->pulsedur = calloc(docount, sizeof(uint16_t));
 	boardio.doptr->bitoffset = calloc(docount, sizeof(uint8_t));
 
@@ -259,23 +266,17 @@ static void initboardDO(uint8_t docount, uint8_t baseoffset) {
 	for(cnt = 0; cnt < docount; cnt++) {
 		boardio.doptr->bitoffset[cnt] = (baseoffset + cnt);
 
-		if (eeconf_get(eegren_board, (eedten_board_domode00 + cnt), &eedword, &reqeeupdate) == LE_OK) {
+		if (eeconf_get(eegren_board, (eedten_board_domode00 + cnt), &eedword) == LE_OK)
 			boardio.doptr->mode[cnt] = eedword;
-		}
-		else {
+		else
 			boardio.doptr->mode[cnt] = modbusdomden_pulseout;
-		}
 
-		if (eeconf_get(eegren_board, (eedten_board_dopul00 + cnt), &eedword, &reqeeupdate) == LE_OK) {
+
+		if (eeconf_get(eegren_board, (eedten_board_dopul00 + cnt), &eedword) == LE_OK)
 			boardio.doptr->pulsedur[cnt] = eedword;
-		}
-		else {
+		else
 			boardio.doptr->pulsedur[cnt] = DO_DEFAULT_HOLD_MSEC;
-		}
 	}
-
-	if (reqeeupdate)	// EEPROM update required
-		boardio.eeupdatebs |= (1 << eegren_board);
 }
 
 
@@ -283,7 +284,7 @@ static void initboardDO(uint8_t docount, uint8_t baseoffset) {
 * Check if any DO is active before activating requested one
 * [25/02/2015]
 ***************************************************************************/
-static uint8_t checkotherdoactive(boardDOstr *doptr, uint8_t doindex) {
+static uint8_t checkotherdoactive(boardDO_t *doptr, uint8_t doindex) {
 	uint8_t				cnt;
 
 
@@ -302,7 +303,7 @@ static uint8_t checkotherdoactive(boardDOstr *doptr, uint8_t doindex) {
 * Activate output
 * [25/02/2015]
 ***************************************************************************/
-static void activateDO(boardDOstr *doptr, uint8_t doindex) {
+static void activateDO(boardDO_t *doptr, uint8_t doindex) {
 	VPORT_t 			*vportptr;
 
 
@@ -319,7 +320,7 @@ static void activateDO(boardDOstr *doptr, uint8_t doindex) {
 * Release output
 * [25/02/2015]
 ***************************************************************************/
-static void releaseDO(boardDOstr *doptr, uint8_t doindex) {
+static void releaseDO(boardDO_t *doptr, uint8_t doindex) {
 	VPORT_t 			*vportptr;
 
 
@@ -358,64 +359,57 @@ static void calctemperature(void) {
 }
 
 
-/***************************************************************************
-* Get board hardware settings
-* [18/08/2015]
-* MX board flag created
-* [10/09/2016]
-***************************************************************************/
-static void getboardhw(boardhwtabstr *hwptr) {
-	uint8_t					tabcnt;
-	//athwenum				hwtype;
+/*
+ * Get board hardware settings
+ * [18/08/2015]
+ * MX board flag created
+ * [10/09/2016]
+ */
+static void getboardhw(boardhwtab_t *hwptr) {
+	uint8_t			i;
 
 
-	for (tabcnt = 0; tabcnt < (ARRAY_SIZE(boardhwtable)); tabcnt++) {
-		memcpy_P(hwptr, &boardhwtable[tabcnt], sizeof(boardhwtable[0]));
+	for (i = 0; i < (ARRAY_SIZE(boardhwtable)); i++) {
+		memcpy_P(hwptr, &boardhwtable[i], sizeof(boardhwtable[0]));
 
-		//hwtype = pgm_read_byte(&boardhwtable[tabcnt].type);	// Read hardware type from program space
-		//if (hwtype == (MainLeiodc.hw & ATHW_ID_MASK)) {
 		if (hwptr->type == (MainLeiodc.hw & ATHW_ID_MASK)) {
-			//*((uint32_t *) &hwptr->dicount) = pgm_read_dword(&boardhwtable[tabcnt].dicount);	// Read DI count from program space
-			//hwptr->docount = pgm_read_byte(&boardhwtable[tabcnt].docount);	// Read DO count from program space
-			//hwptr->dioffs = pgm_read_byte(&boardhwtable[tabcnt].dioffs);	// Read DI base offset from program space
-			//hwptr->dooffs = pgm_read_byte(&boardhwtable[tabcnt].dooffs);	// Read DO base offset from program space
 			return;
 		}
 	}
-	memset(hwptr, 0, sizeof(boardhwtabstr));	// Clean structure if hardware type is not found
+	LEF_MEMZEROP(hwptr)		// Clean structure if hardware type is not found
 }
 
 
-/***************************************************************************
-* Board IO main process
-* [25/02/2015]
-* DI and DO mode enums now defined in modbusdef.h
-* [19/08/2015]
-* LED driver main process moved from main.c
-* [24/08/2015]
-* LED clear function removed
-* [09/09/2016]
-***************************************************************************/
+/*
+ * Board IO main process
+ * [25/02/2015]
+ * DI and DO mode enums now defined in modbusdef.h
+ * [19/08/2015]
+ * LED driver main process moved from main.c
+ * [24/08/2015]
+ * SPI communication to external ADC
+ * [04/07/2019]
+ */
 void board_mainproc(void) {
-	uint8_t				cnt;
-	boardDIstr			*diptr = boardio.diptr;
-	boardDOstr			*doptr = boardio.doptr;
+	uint8_t			i;
+	boardDI_t		*diptr = boardio.diptr;
+	boardDO_t		*doptr = boardio.doptr;
 
 
 	if (doptr) {
-		for (cnt = 0; cnt < doptr->count; cnt++) {
-			switch (doptr->mode[cnt]) {
+		for (i = 0; i < doptr->count; i++) {
+			switch (doptr->mode[i]) {
 			case modbusdomden_pulseout:
-				if (doptr->dostates & (1 << cnt)) {
-					if (doptr->samples[cnt] >= doptr->pulsedur[cnt]) {	// Release DO if activate and samples expired
-						releaseDO(doptr, cnt);
+				if (doptr->dostates & (1 << i)) {
+					if (doptr->samples[i] >= doptr->pulsedur[i]) {	// Release DO if activate and samples expired
+						releaseDO(doptr, i);
 					}
 				}
 
-				if (doptr->updatereg & (1 << cnt)) {			// Request to update this DO
-					if (!(doptr->updatereg & ~(1 << cnt))) {	// Only one DO requested
-						if (checkotherdoactive(doptr, cnt) == LE_OK) {	// If no other DOs already active
-							activateDO(doptr, cnt);
+				if (doptr->updatereg & (1 << i)) {			// Request to update this DO
+					if (!(doptr->updatereg & ~(1 << i))) {	// Only one DO requested
+						if (checkotherdoactive(doptr, i) == LE_OK) {	// If no other DOs already active
+							activateDO(doptr, i);
 						}
 					}
 				}
@@ -430,28 +424,51 @@ void board_mainproc(void) {
 	}
 
 
-	// TODO add timer and disable LED OE pin when expired and
-	// if there were no indication changes
-#ifdef DEBUG_LEDUPDATE
-	boardio.rflags |= BOARDRF_UPDATE_LED;
-#endif
-	if (boardio.rflags & BOARDRF_UPDATE_LED) {		// Update LEDs if flag is set
-		boardio.rflags &= ~BOARDRF_UPDATE_LED;		// Must be immediately AFTER check, due to interrupt awareness
-		//ledregclear();
-		memset(leddriver.leddata, 0, LED_DRIVER_COUNT);
-		leddriver.rflags |= LEDRF_UPDATE_LED;
+	if (boardio.aiptr) {		// Communication to external ADC
+		spidrv_mainproc();
 
-		if (diptr) {
-			for (cnt = 0; cnt < diptr->count; cnt++) {
-				if (diptr->distates & (1 << cnt)) {
-					leddriver.leddata[CALCULATE_REGOFFSET(diptr, cnt)] |= CALCULATE_BITMASK(diptr, cnt);
+		for (i = 0; i < boardio.aiptr->count; i++) {
+			// TODO LEDs to blink based on AI value
+			if (boardio.aiptr->uval[i] & 0x8000) {	// Negative AI
+				if (leddriver.leddata[0] & (1 << i)) {
+					leddriver.leddata[0] &= ~(1 << i);
+					leddriver.leddata[1] |= (1 << i);
+					leddriver.rflags |= LEDRF_UPDATE_LED;
+				}
+			}
+			else {	// Positive AI
+				if (!(leddriver.leddata[0] & (1 << i))) {
+					leddriver.leddata[0] |= (1 << i);
+					leddriver.leddata[1] &= ~(1 << i);
+					leddriver.rflags |= LEDRF_UPDATE_LED;
 				}
 			}
 		}
-		if (doptr) {
-			for (cnt = 0; cnt < doptr->count; cnt++) {
-				if (doptr->dostates & (1 << cnt)) {
-					leddriver.leddata[CALCULATE_REGOFFSET(doptr, cnt)] |= CALCULATE_BITMASK(doptr, cnt);
+	}
+	else {
+		// TODO add timer and disable LED OE pin when expired and
+		// if there were no indication changes
+#ifdef DEBUG_LEDUPDATE
+		boardio.rflags |= BOARDRF_UPDATE_LED;
+#endif
+
+		if (boardio.rflags & BOARDRF_UPDATE_LED) {		// Update LEDs if flag is set
+			boardio.rflags &= ~BOARDRF_UPDATE_LED;		// Must be immediately AFTER check, due to interrupt awareness
+			memset(leddriver.leddata, 0, LED_DRIVER_COUNT);
+			leddriver.rflags |= LEDRF_UPDATE_LED;
+
+			if (diptr) {
+				for (i = 0; i < diptr->count; i++) {
+					if (diptr->distates & (1 << i)) {
+						leddriver.leddata[CALCULATE_REGOFFSET(diptr, i)] |= CALCULATE_BITMASK(diptr, i);
+					}
+				}
+			}
+			if (doptr) {
+				for (i = 0; i < doptr->count; i++) {
+					if (doptr->dostates & (1 << i)) {
+						leddriver.leddata[CALCULATE_REGOFFSET(doptr, i)] |= CALCULATE_BITMASK(doptr, i);
+					}
 				}
 			}
 		}
@@ -466,56 +483,75 @@ void board_mainproc(void) {
 }
 
 
-/***************************************************************************
-* Initialize board hardware
-* [26/02/2015]
-* ADCB is used for temperature measurements
-* [14/06/2015]
-* New hardware 3100 without MX board
-* Changes related to board hardware profile table creation
-* Default configuration pin created
-* [19/08/2015]
-* IO=4000, IO=0400, IO=2200 modules added
-* MX board flag created
-* Reset register created
-* [17/10/2016]
-***************************************************************************/
+/*
+ * Initialize board hardware
+ * [26/02/2015]
+ * ADCB is used for temperature measurements
+ * [14/06/2015]
+ * New hardware 3100 without MX board
+ * Changes related to board hardware profile table creation
+ * Default configuration pin created
+ * [19/08/2015]
+ * IO=4000, IO=0400, IO=2200 modules added
+ * MX board flag created
+ * Reset register created
+ * [17/10/2016]
+ * IO=0040 module added
+ * [04/07/2019]
+ */
 void board_init(void) {
 	uint16_t		adcafactorycal, adcbfactorycal;
-	boardhwtabstr	boardhw;
+	boardhwtab_t	boardhw;
 
 
 	clock_init();					// Init system clock first
+	LEF_MEMZEROS(boardio)
+
 
 #ifndef DISABLE_BOARD_AUTOID		// Disable automatic board ID identification using resistors on port PE
 	PORTCFG.MPCMASK = MASK_AUTOID;	// Mask pins which are not used as ID inputs
 	MCUP_AUTOID.PIN0CTRL |= PORT_OPC_PULLUP_gc;		// Enable pull-up resistors
 
-	for (uint8_t cnt = 0; cnt < 32; cnt++) {}		// Wait a little bit before reading inputs
+	for (uint8_t i = 0; i < 32; i++) {}				// Wait a little bit before reading inputs
 
 	MainLeiodc.hw = MCUP_AUTOID.IN & MASK_AUTOID;	// Read board ID resistors
 	if (MCUP_MXAUTOID.IN & PIN_MXAUTOID)			// Read MX board identification pin
 		MainLeiodc.hw |= ATHWF_MXBOARD;
 #endif // DISABLE_BOARD_AUTOID
 
-	memset(&boardio, 0, sizeof(boardio));		// Clean board structure
-	if (eeconf_crc(0) == LE_FAIL) {				// Check EEPROM configuration CRC
-		boardio.rflags |= BOARDRF_EECONF_CORRUPTED;
+
+	if (eeconf_validate(0) == LE_FAIL) {		// Check primary EEPROM configuration
+#ifdef DEBUG_EECRC_SHOW
+		PORTK.DIRSET = PIN0_bm | PIN6_bm;		// Make RUN LED pin Output
+		PORTK.OUTCLR = PIN0_bm | PIN6_bm;		// Turn on RUN LED
+		for (uint32_t i = 0; i < 0x100000; i++) {}
+#endif
+		if (eeconf_validate(1) == LE_OK) {		// Backup EEPROM configuration is valid
+			 eeconf_copy(0);					// Restore from backup
+		}
 	}
 
-
-	PORTCFG.MPCMASK = 0xFF;					// Apply new configuration to all pins
-	MCUP_IOL.PIN0CTRL |= PORT_INVEN_bm;		// Invert all pins
-	MCUP_IOL.DIR = 0;						// Set direction to input for all pins
-
-	PORTCFG.MPCMASK = 0xFF;					// Apply new configuration to all pins
-	MCUP_IOH.PIN0CTRL |= PORT_INVEN_bm;		// Invert all pins
-
-	PORTCFG.VPCTRLA = PORTCFG_VP0MAP_PORTF_gc | PORTCFG_VP1MAP_PORTH_gc;	// Map MCU ports to virtual ports
 
 	boardio.ctrlport = &MCUP_CTRL;			// Control port
 
 	getboardhw(&boardhw);					// Get board hardware settings
+
+
+	switch (MainLeiodc.hw & ATHW_ID_MASK) {
+	case athwenat0040v10:
+		break;
+
+	default:
+		PORTCFG.MPCMASK = 0xFF;				// Apply new configuration to all pins
+		MCUP_IOL.PIN0CTRL |= PORT_INVEN_bm;	// Invert all pins
+		MCUP_IOL.DIR = 0;					// Set direction to input for all pins
+
+		PORTCFG.MPCMASK = 0xFF;				// Apply new configuration to all pins
+		MCUP_IOH.PIN0CTRL |= PORT_INVEN_bm;	// Invert all pins
+
+		PORTCFG.VPCTRLA = PORTCFG_VP0MAP_PORTF_gc | PORTCFG_VP1MAP_PORTH_gc;	// Map MCU ports to virtual ports
+		break;
+	}
 
 
 	switch (MainLeiodc.hw & ATHW_ID_MASK) {
@@ -559,6 +595,11 @@ void board_init(void) {
 		boardio.defcfgpin = PIN4_bm;			// Default configuration input pin
 		break;
 
+	case athwenat0040v10:
+		boardio.ledoepin = PIN6_bm;				// LED OE pin
+		spi_init(boardhw.aicount);
+		break;
+
 	default:
 		MCUP_IOH.OUT = 0x00;					// Clear Outputs - logic 0, but pins driven high because of inversion
 		MCUP_IOH.DIR = 0xF0;					// Pins [0..3] are inputs, pins [4..7] outputs
@@ -572,8 +613,9 @@ void board_init(void) {
 	initboardDO(boardhw.docount, boardhw.dooffs);	// Initialize all outputs
 	boardio.mapsize =
 			MODBUS_SYSREG_COUNT +
-			(MODBUS_DIMULT * boardhw.dicount) + 1 +
-			(MODBUS_DOMULT * boardhw.docount) + 1;
+			(MODBUS_DIMULT * boardhw.dicount) + MODBUS_DIREGCNT +
+			(MODBUS_DOMULT * boardhw.docount) + MODBUS_DOREGCNT +
+			(MODBUS_AIMULT * boardhw.aicount);
 
 
 #ifndef DEBUG_NOLEDDRV
@@ -591,7 +633,7 @@ void board_init(void) {
 		PORTCFG.MPCMASK = boardio.defcfgpin;
 		boardio.ctrlport->PIN0CTRL = PORT_OPC_PULLUP_gc;
 
-		for (uint8_t cnt = 0; cnt < 32; cnt++) {}			// Wait a little bit before reading input
+		for (uint8_t i = 0; i < 32; i++) {}			// Wait a little bit before reading input
 
 		if (!(boardio.ctrlport->IN & boardio.defcfgpin)) {	// Check default configuration pin
 			boardio.rflags |= BOARDRF_DEFCONF;				// Set default configuration flag

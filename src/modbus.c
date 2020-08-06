@@ -2,20 +2,56 @@
  ============================================================================
  Name        : Modbus.c
  Author      : AK
- Version     : V1.05
+ Version     : V2.01
  Copyright   : Property of Londelec UK Ltd
  Description : Modbus RTU communication protocol link layer module
 
   Change log :
 
-  *********V1.05 07/09/2016**************
+  *********V2.01 14/01/2020**************
+  Compatibility with Modbus Slave improved
+
+  *********V2.00 29/03/2019**************
+  Modbus TCP support added
+
+  *********V1.12 21/02/2019**************
+  Channel station link function generalized
+
+  *********V1.11 10/02/2019**************
+  Tx buffer pointer and length moved to channel structure
+  CRC16 calculate function moved from leandc.c
+
+  *********V1.10 28/11/2017**************
+  Socket initialization enabled
+
+  *********V1.09 17/05/2017**************
+  Fixed: Rx channel log fixed and invalid CRC message added to logs
+
+  *********V1.08 04/03/2017**************
+  Dynamic TxDelay created
+
+  *********V1.07 13/08/2016**************
   Local functions marked static
+  Online check function generalized
+  Get information address function removed, generalized in relatime.c
+  XMLmodbus.h include removed
 
-  *********V1.04 24/08/2015**************
-  Default t35 timeout initialization removed
+  *********V1.06 09/04/2016**************
+  Fixed: If received message analyze fails, just keep trying to analyze until timeout expires
 
-  *********V1.03 16/06/2015**************
-  Character multiplier is no longer passed to application layer
+  *********V1.05 20/08/2015**************
+  t35 timeout validation created
+
+  *********V1.04 13/06/2015**************
+  Fixed: New station pointer is returned by main protocol processing function when next station is selected
+  Station initialization/generic communication mode is indicated using service index -4 (servDI104started)
+  Character multiplier argument removed from application layer functions
+  Exported flags changed to states
+  Received byte service counter added
+  Poll cycle service AI calculation added
+
+  *********V1.03 27/02/2015**************
+  Outgoing modbus function 0x11 added
 
   *********V1.02 12/02/2015**************
   Changes related to marking flag addition to exported qualifier
@@ -32,758 +68,769 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <math.h>			// fabs
-
 
 #include "modbus.h"
-#include "modbusdef.h"
-#include "usart.h"
-//#include "XMLmodbus.h"
+//#include "modbusdef.h"
 
 
-
-//const lechar *ModbusVersion = " ModbusVersion=1.02 ";
+const lechar ModbusVersion[] = " ModbusVersion=2.01 ";
 
 
 #ifdef GLOBAL_DEBUG
-//#define	IEC10xma_BuildRx				// Build unique message for debugging
+#define SLAVE_T35	10000
+//#define MODBUS_DEFAULT_OFFLINEDELAY		10			// Default Slave Offline delay timer value in seconds
+//#define DEBUG_LOGEVERYTIMEOUT
 #endif	// GLOBAL_DEBUG
 
 
+// Buffer sizes
+#define MODBUS_RXBUFF_SIZE				272			// Rx buffer size including link layer framing and TCP header
+#define MODBUS_TXBUFF_SIZE				272			// Tx buffer size including link layer framing and TCP header
 
-
+// Timing constants
+#define MODBUS_DEFAULT_NORESPCNT		5			// Default Master No Response counter value
+#define MODBUS_DEFAULT_OFFLINEDELAY		60			// Default Slave Offline delay timer value in seconds
+#define MODBUS_DEFAULT_DEGRADEDRETRIES	5			// Default Master Degraded retry counter value
+#define MODBUS_DEFAULT_DEGRADEDTIMEOUT	300			// Default Master Degraded timeout value in seconds
+#define MODBUS_RXT35CONST				3500000		// Default Modbus Rx idle timeout conversion constant in 10usec
 
 
 // Macros
-#define MODBUS_RXLOG_MACRO(mlength) commslogger(sharedlink->rxbuff, mlength, 0, staptr->logfile, clogenRX);
-#define MODBUS_RXHWLOG_MACRO(mlength) commslogger(sharedlink->rxbuff, mlength, 0, staptr->channelinst->logfile, clogenRX);
-#define MODBUS_TXLOG_MACRO commslogger(*txbuffptr, txlength, 0, staptr->logfile, clogenTX);
-#define MODBUS_TXHWLOG_MACRO commslogger(*txbuffptr, txlength, 0, staptr->channelinst->logfile, clogenTX);
+#define MODBUS_CRC_CALC(mdata) calc_crc16(&crc, MODBUS_CRC16_POLY, mdata);
 
-// Function and data offset in application buffer
-#define MOFFSET_FUNC (sharedlink->charmult * MODBUSOFFSET_FUNC)
-#define MOFFSET_DATA (sharedlink->charmult * MODBUSOFFSET_DATA)
+#if ((MODBUSMA_TYPE == MODBUS_GENERIC) || (MODBUSSL_TYPE == MODBUS_GENERIC))
+#include "realtime.h"
+
+static const lechar clogrxlenoverflow[] = "Received message length (%u) exceeds limit of (%u) bytes";
+static const lechar clogrxlenincorrect[] = "Received message length (%u) is incorrect, (%u) bytes expected";
+
+#define COMMS_RXLOG(mlength, moffs)\
+		if ((staptr->logfile) && (staptr->logfile->lflags & CLOGXF_INCOMING))\
+			commslogger(sharedlink->rxbuff + moffs, mlength, NULL, staptr->logfile, clogenRX);
+
+#define COMMS_RXHWLOG(mlength, moffs) stacom_clog(stacoms, CLOGXF_INCOMING, sharedlink->rxbuff + moffs, mlength, clogenRX);
+
+#define COMMS_TXLOG\
+		if ((staptr->logfile) && (staptr->logfile->lflags & CLOGXF_OUTGOING))\
+			commslogger(txptr, chanptr->txlen, NULL, staptr->logfile, clogenTX);\
+		stacom_clog(stacoms, CLOGXF_OUTGOING, txptr, chanptr->txlen, clogenTX);
+
+#define COMMS_RXERRLOG(...) station_rxclog(staptr, CLOGXF_STATUSINFO, (sharedlink->fformat == ModbusTCP) ? (sharedlink->rxbuff) : (sharedlink->rxbuff + MODBUS_TCPHEADER_SIZE), sharedlink->rxbytecnt, clogenERR, __func__, __FILE__, __LINE__, __VA_ARGS__);
+#define COMMS_TCPERRLOG(mlen, ...) station_rxclog(staptr, CLOGXF_STATUSINFO, sharedlink->rxbuff, mlen, clogenERR, __func__, __FILE__, __LINE__, __VA_ARGS__);
+#else
+#define COMMS_RXLOG(mlength, moffs)
+#define COMMS_RXHWLOG(mlength, moffs)
+#define COMMS_TXLOG
+#define COMMS_RXERRLOG(...)
+#define COMMS_TCPERRLOG(mlen, ...)
+#endif
 
 
 
 
-#ifdef GLOBAL_DEBUG
+/*
+ * Check length and CRC of the received Modbus RTU message
+ * [10/04/2019]
+ */
+static int rx_crc_check(station_t *staptr, uint8_t *rxbuff) {
+	Modbus_shlink_t			*sharedlink = staptr->stacoms->priv;
+	uint16_t				i;
+	uint16_t 				crc = 0xffff;
 
-#endif	// GLOBAL_DEBUG
 
-
-
-
-/***************************************************************************
-* Generate Modbus CRC
-* [27/10/2014]
-***************************************************************************/
-void buildCRC16(uint16_t *crc, uint8_t databyte) {
-	uint8_t		cnt;
-
-	*crc ^= databyte;
-	for (cnt = 0; cnt < 8; cnt++) {
-		if (*crc & 1) {
-			*crc >>= 1;
-			*crc ^= MODBUS_CRC16_POLY;
-		}
-		else
-			*crc >>= 1;
+	for (i = 0; i < (sharedlink->rxbytecnt - MODBUS_CRC_SIZE); i++) {
+		MODBUS_CRC_CALC(rxbuff[i]);
 	}
+
+
+	if (
+			((crc >> 8) != rxbuff[sharedlink->rxbytecnt - 1]) ||
+			((crc & 0xFF) != rxbuff[sharedlink->rxbytecnt - 2])) {
+		COMMS_RXERRLOG("CRC error (0x%02X 0x%02X was expected)", crc & 0xFF, crc >> 8);
+		return LE_FAIL;
+	}
+	return LE_OK;
 }
 
 
-/***************************************************************************
-* Analyze Modbus message
-* [20/02/2015]
-***************************************************************************/
-static CHStateEnum Modbussl_analyze(StatStr *staptr) {
-	Modbussl_pointers		*realprot = (Modbussl_pointers *) staptr->realprotocol;
-	Modbus_linklayer		*linklayer = realprot->linklayer;
-	Modbus_shared_linklayer	*sharedlink = realprot->sharedlink;
-	uint8_t					*rxappbuffer;
-	uint8_t					datalength = 0;
-	uint16_t				cnt;
-	//logflagdef				logflags = 0;
-	//logflagdef				chlogflags = 0;
-	//CHStateEnum				chstate = CHCommsEmpty;
-	//uint8_t					resetrespcnt = 0;
-
-
-	//if (staptr->runflags & SERVICE_COMMSDISABLED) {
-	//	sharedlink->rxbytecnt = 0;
-	//	return CHCommsRxTx;				// Pretend we have decoded message successfully
-	//}
-
-
-	// Read Logger flags if logfile pointer exists
-	//if (staptr->logfile) logflags = staptr->logfile->lflags;
-	//if (staptr->channelinst->logfile) chlogflags = staptr->channelinst->logfile->lflags;
-
-
+/*
+ * Received PDU size check
+ * [08/05/2019]
+ */
+static chret_e pdu_size_check(station_t *staptr, txrx8_t datalength) {
+	Modbus_shlink_t			*sharedlink = staptr->stacoms->priv;
+	uint8_t					*rxbuff = sharedlink->rxbuff + MODBUS_TCPHEADER_SIZE;
 
 
 	switch (sharedlink->fformat) {
-	/*case ModbusTCP:
-		if (chlogflags & CLOGXF_INCOMING) {
-			MODBUS_RXHWLOG_MACRO(sharedlink->rxapplen + MODBUS_TCPHEADER_SIZE)	// Channel comms logger if enabled
+	case ModbusTCP:
+		if ((sharedlink->rxbytecnt - MODBUS_HEADER_SIZE) != datalength) {
+			COMMS_TCPERRLOG(sharedlink->rxbytecnt + MODBUS_TCPHEADER_SIZE, clogrxlenincorrect,
+					(sharedlink->rxbytecnt + MODBUS_TCPHEADER_SIZE),
+					datalength + MODBUS_HEADER_SIZE + MODBUS_TCPHEADER_SIZE);
+			return chret_dataerror;
 		}
-		rxappbuffer = sharedlink->rxbuff + MODBUS_TCPHEADER_SIZE;
-		if (rxappbuffer[MODBUSOFFSET_ADDR] != MODBUS_GLOBAL_ADDR) {
-			if (rxappbuffer[MODBUSOFFSET_ADDR] != linklayer->devaddr) goto Modbusma_notreceived;
+		break;
+
+
+	case ModbusASCII:
+		// TODO data length validation
+		break;
+
+
+	case ModbusRTU:
+		if ((sharedlink->rxbytecnt - (MODBUS_HEADER_SIZE + MODBUS_CRC_SIZE)) < datalength)
+			return chret_empty;		// Not enough bytes received, keep waiting, applies only to Modbus RTU
+		else if ((sharedlink->rxbytecnt - (MODBUS_HEADER_SIZE + MODBUS_CRC_SIZE)) > datalength) {
+			COMMS_RXERRLOG(clogrxlenincorrect,
+					sharedlink->rxbytecnt,
+					datalength + (MODBUS_HEADER_SIZE + MODBUS_CRC_SIZE));
+			return chret_dataerror;
 		}
-		if ((rxappbuffer[MOFFSET_FUNC] & 0x7F) != realprot->txbuff[MODBUS_TCPHEADER_SIZE + MODBUSOFFSET_FUNC]) goto Modbusma_notreceived;
-		datalength = sharedlink->rxapplen - MODBUS_HEADER_SIZE;		// Data length for functions without length field
+
+		if (rx_crc_check(staptr, rxbuff) == LE_FAIL)
+			return chret_dataerror;
+		break;
+
+
+	default:	// Unknown frame format
+		return chret_dataerror;
+	}
+	return chret_rxtx;
+}
+
+
+#if MODBUSMA_TYPE
+/*
+ * Analyze Modbus message
+ * [07/11/2014]
+ * Fixed: Reset comms state when message received
+ * [30/11/2014]
+ * Received byte service counter added
+ * [28/06/2015]
+ * Fixed: Rx channel log fixed
+ * [17/05/2017]
+ * Modbus TCP support added
+ * [08/05/2019]
+ * Station online function used
+ * [13/02/2020]
+ */
+chret_e Modbusma_rx_check(station_t *staptr, txrx8_t *datalength) {
+	stacom_t			*stacoms = staptr->stacoms;
+	//channel_t			*chanptr = stacoms->chaninst;
+	Modbus_shlink_t		*sharedlink = stacoms->priv;
+	uint8_t				*rxbuff = sharedlink->rxbuff + MODBUS_TCPHEADER_SIZE;
+	uint16_t			loglen = sharedlink->rxbytecnt;
+	uint8_t				boffs = MODBUS_TCPHEADER_SIZE;
+
+
+	*datalength = 0;
+
+	switch (sharedlink->fformat) {
+	case ModbusTCP:
+		loglen += MODBUS_TCPHEADER_SIZE;
+		boffs = 0;
+		*datalength = sharedlink->rxbytecnt - MODBUS_HEADER_SIZE;		// Data length for functions without length field
 		break;
 
 	case ModbusASCII:
-		// TODO device address validation
-		rxappbuffer = sharedlink->rxbuff;
-		break;*/
+		// TODO need to figure out at which point to convert from ASCII to HEX
+		break;
 
-	//case ModbusRTU:
+	case ModbusRTU:
+		if (sharedlink->rxbytecnt < (MODBUS_HEADER_SIZE + MODBUS_CRC_SIZE))
+			return chret_empty;		// Not enough bytes received, keep waiting, applies only to Modbus RTU
+		*datalength = sharedlink->rxbytecnt - MODBUS_HEADER_SIZE - MODBUS_CRC_SIZE;		// Data length for functions without length field
+		break;
+
+	default:	// Unknown frame format
+		goto recv_error;
+	}
+
+
+	if (rxbuff[MODBOFS_FUNC] & MBB_EXCEPTION) {
+		*datalength = 1;		// Exception message has 1 byte
+	}
+	else {
+		switch (rxbuff[MODBOFS_FUNC]) {
+		case MODFUNC_01:
+		case MODFUNC_02:
+		case MODFUNC_03:
+		case MODFUNC_04:
+		case MODFUNC_0C:
+		case MODFUNC_11:
+		case MODFUNC_14:
+		case MODFUNC_15:
+		case MODFUNC_17:
+			*datalength = rxbuff[MODBOFS_DATA] + 1;
+			break;
+
+		case MODFUNC_05:
+		case MODFUNC_06:
+		case MODFUNC_0B:
+		case MODFUNC_0F:
+		case MODFUNC_10:
+			*datalength = 4;
+			break;
+
+		case MODFUNC_07:
+		case MODFUNC_08:
+		case MODFUNC_2B:
+			break;
+
+		case MODFUNC_16:
+			*datalength = 6;
+			break;
+
+		case MODFUNC_18:
+			// Data length is two bytes, however we assume the highbyte 0
+			*datalength = rxbuff[MODBOFS_DATA + 1] + 2;
+			break;
+
+		default:	// Ignore unknown functions
+			break;
+		}
+	}
+
+
+	switch (pdu_size_check(staptr, *datalength)) {
+	case chret_empty:
+		return chret_empty;	// Not enough bytes received, keep waiting, applies only to Modbus RTU
+
+	case chret_dataerror:
+		goto recv_error;
+
 	default:
-		rxappbuffer = sharedlink->rxbuff;
-		sharedlink->crc = 0xFFFF;		// Reset CRC
-		//if (chlogflags & CLOGXF_INCOMING) {
-		//	MODBUS_RXHWLOG_MACRO(sharedlink->rxbytecnt)		// Channel comms logger if enabled
-		//}
-		// Validate device address
-		if (rxappbuffer[MODBUSOFFSET_ADDR] != linklayer->devaddr)
-			goto Modbussl_notreceived;
-		datalength = sharedlink->rxbytecnt - MODBUS_HEADER_SIZE - MODBUS_CRC_SIZE;		// Data length for functions without length field
 		break;
 	}
 
 
+	COMMS_RXHWLOG(loglen, boffs)	// Channel comms logger
 
 
-	switch (rxappbuffer[MOFFSET_FUNC]) {
+	if (rxbuff[MODBUSOFFSET_ADDR] != staptr->address) {
+		COMMS_RXERRLOG("Incorrect device address (%u) received, (%u) was expected", rxbuff[MODBUSOFFSET_ADDR], staptr->address);
+		goto recv_error;
+	}
+
+
+	if ((rxbuff[MODBOFS_FUNC] & ~MBB_EXCEPTION) != sharedlink->txbuff[MODBUS_TCPHEADER_SIZE + MODBUSOFFSET_FUNC]) {	// Unexpected function received
+		COMMS_RXERRLOG("Unexpected Modbus function (%u) received, (%u) was expected",
+				(rxbuff[MODBOFS_FUNC] & ~MBB_EXCEPTION),
+				sharedlink->txbuff[MODBUS_TCPHEADER_SIZE + MODBUSOFFSET_FUNC]);
+		goto recv_error;
+	}
+
+
+	if (staptr->runflags & SERVICE_COMMSDISABLED)
+		goto recv_error;		// Current station disabled, change state to flush and await for timeout to occur
+
+
+	COMMS_RXLOG(loglen, boffs)		// Station comms logger
+
+	SERVF_RXCNT(sharedlink->rxbytecnt)	// Update Rx message and byte counters
+	sharedlink->rxbytecnt = 0;			// Reset receive pointer after logfile function call
+	mastersta_reset_cnt(staptr);
+
+	station_online_make(staptr, 1);
+	return chret_rxtx;
+
+
+	recv_error:
+	staptr->stacoms->serstate = ser_flush;
+	return chret_dataerror;
+}
+#endif
+
+
+/*
+ * Check received Modbus Slave message
+ * [08/05/2019]
+ */
+chret_e Modbussl_rx_check(station_t *staptr, txrx8_t *datalength, int *enabledf) {
+	stacom_t			*stacoms = staptr->stacoms;
+	//channel_t			*chanptr = stacoms->chaninst;
+	Modbus_shlink_t		*sharedlink = stacoms->priv;
+	uint8_t				*rxbuff = sharedlink->rxbuff + MODBUS_TCPHEADER_SIZE;
+	uint16_t			loglen = sharedlink->rxbytecnt;
+	chret_e				chstate;
+#if (MODBUSSL_TYPE == MODBUS_GENERIC)
+	uint8_t				boffs = MODBUS_TCPHEADER_SIZE;
+#endif
+
+
+	*datalength = 0;
+
+	switch (sharedlink->fformat) {
+	case ModbusTCP:
+		loglen += MODBUS_TCPHEADER_SIZE;
+		*datalength = sharedlink->rxbytecnt - MODBUS_HEADER_SIZE;	// Data length for functions without length field
+#if (MODBUSSL_TYPE == MODBUS_GENERIC)
+		boffs = 0;
+#endif
+		break;
+
+	case ModbusASCII:
+		// TODO need to figure out at which point to convert from ASCII to HEX
+		break;
+
+	case ModbusRTU:
+		if (sharedlink->rxbytecnt < (MODBUS_HEADER_SIZE + MODBUS_CRC_SIZE))
+			return chret_empty;		// Not enough bytes received, keep waiting, applies only to Modbus RTU
+		*datalength = sharedlink->rxbytecnt - MODBUS_HEADER_SIZE - MODBUS_CRC_SIZE;		// Data length for functions without length field
+		break;
+
+	default:	// Unknown frame format
+		goto recv_error;
+	}
+
+
+	switch (rxbuff[MODBOFS_FUNC]) {
 	case MODFUNC_01:
 	case MODFUNC_02:
 	case MODFUNC_03:
 	case MODFUNC_04:
 	case MODFUNC_05:
 	case MODFUNC_06:
-		datalength = 4;
+		*datalength = 4;
 		break;
 
 	case MODFUNC_07:
 	case MODFUNC_0B:
 	case MODFUNC_0C:
 	case MODFUNC_11:
-		datalength = 0;
+		*datalength = 0;
 		break;
 
 	case MODFUNC_08:
 	case MODFUNC_2B:
-		break;			// Variable length
+		break;
 
 	case MODFUNC_0F:
 	case MODFUNC_10:
-		datalength = rxappbuffer[sharedlink->charmult * 6] + 5;
+		*datalength = rxbuff[MODBOFS_DATA + 4] + 5;
 		break;
 
 	case MODFUNC_14:
 	case MODFUNC_15:
-		datalength = rxappbuffer[MOFFSET_DATA] + 1;
+		*datalength = rxbuff[MODBOFS_DATA] + 1;
 		break;
 
 	case MODFUNC_16:
-		datalength = 6;
+		*datalength = 6;
 		break;
 
 	case MODFUNC_17:
-		datalength = rxappbuffer[sharedlink->charmult * 10] + 9;
+		*datalength = rxbuff[MODBOFS_DATA + 8] + 9;
 		break;
 
 	case MODFUNC_18:
-		// FIXME length is two bytes
-		datalength = rxappbuffer[MOFFSET_DATA] + 1;
+		*datalength = 2;
 		break;
 
-	default:	// Unknown function
-		goto Modbussl_notreceived;
+	default:	// Ignore unknown functions
 		break;
 	}
 
 
+	switch (pdu_size_check(staptr, *datalength)) {
+	case chret_empty:
+		return chret_empty;	// Not enough bytes received, keep waiting, applies only to Modbus RTU
 
+	case chret_dataerror:
+		goto recv_error;
 
-	// Check length of data
-	switch (sharedlink->fformat) {
-	/*case ModbusTCP:
-		if ((sharedlink->rxapplen - MODBUS_HEADER_SIZE) != datalength) {
-			goto Modbussl_notreceived;
-		}
-		//if (logflags & CLOGXF_INCOMING) {
-		//	MODBUS_RXLOG_MACRO(sharedlink->rxapplen + MODBUS_TCPHEADER_SIZE)		// Station comms logger if enabled
-		//}
-		break;
-
-	case ModbusASCII:
-		// TODO data length validation
-		break;*/
-
-	//case ModbusRTU:
 	default:
-		if ((sharedlink->rxbytecnt - MODBUS_HEADER_SIZE - MODBUS_CRC_SIZE) != datalength) {
-			goto Modbussl_notreceived;
-		}
-		for (cnt = 0; cnt < (sharedlink->rxbytecnt - MODBUS_CRC_SIZE); cnt++) {
-			buildCRC16(&sharedlink->crc, rxappbuffer[cnt]);
-		}
-		if ((sharedlink->crc >> 8) != rxappbuffer[sharedlink->rxbytecnt - 1])
-			goto Modbussl_notreceived;
-		if ((sharedlink->crc & 0xFF) != rxappbuffer[sharedlink->rxbytecnt - 2])
-			goto Modbussl_notreceived;
-		//if (logflags & CLOGXF_INCOMING) {
-		//	MODBUS_RXLOG_MACRO(sharedlink->rxbytecnt)		// Station comms logger if enabled
-		//}
 		break;
 	}
 
 
+	COMMS_RXHWLOG(loglen, boffs)	// Channel comms logger
+	if (rxbuff[MODBUSOFFSET_ADDR] == MODBUS_BROADCAST_ADDR) {
+		chstate = chret_rxtx;
+		goto rxsl_complete;
+	}
 
 
-	//servincrementCNT(staptr, servCTrx, 0);	// Increment Rx counter
-	sharedlink->rxbytecnt = 0;				// Reset receive pointer after logfile function call
-	realprot->linklayer->commsstate = Modbuslinkok;			// Reset comms state if message received
-	linklayer->txapplen = Modbussl_appprocess(realprot->applayer, rxappbuffer);
+#if (MODBUSSL_TYPE == MODBUS_GENERIC)
+	station_t *selsta;
+	if ((selsta = station_search(stacoms, rxbuff[MODBUSOFFSET_ADDR], enabledf)))
+		staptr = selsta;
+	else {
+#else
+	if (rxbuff[MODBUSOFFSET_ADDR] != staptr->address) {
+#endif
+		chstate = chret_disabled;
+		goto rxsl_complete;		// Message received for non-existent or disabled station
+	}
+
+	COMMS_RXLOG(loglen, boffs)	// Station comms logger
+
+#if (MODBUSSL_TYPE == MODBUS_GENERIC)
+	station_online_make(staptr, 1);
+#endif
+	chstate = chret_rxtx;
 
 
-	if (!linklayer->txapplen)
-		goto Modbussl_notreceived;
+	rxsl_complete:
+	sharedlink->rxbytecnt = 0;	// Reset received byte count AFTER all log function calls
+	return chstate;
 
 
-
-
-	/*switch (staptr->stastate) {
-	case staenonline:
-		break;
-	default:	// Make station online if Offline or uninitialized
-		staptr->stastate = staenonline;
-		servcheckgenDI(staptr, servDIonline, STATION_ONLINE_DIQ);
-		CLOGINFO_MACRO(clogOnline)
-		break;
-	}*/
-
-
-	// Start Offline delay timer if Offline delay const is defined
-	//if (staptr->offline1dsec) {
-	//	MAINF_SET_1SEC(staptr->offline1dsec, &staptr->offlinetimer);	// Start Offline delay Timer
-	//}
-	return CHCommsRxTx;
-
-
-	Modbussl_notreceived:
-	return CHCommsEmpty;
+	recv_error:
+	station_flush(staptr);		// Flush any remaining data if error occurred
+	return chret_dataerror;
 }
 
 
-/***************************************************************************
-* Receive data from serial or socket buffer
-* [04/11/2014]
-***************************************************************************/
-static CHStateEnum Modbus_receive(DRVARGDEF_RX) {
-	ChannelStr				*chanptr = staptr->channelinst;
-	Modbus_linklayer		*linklayer;
-	Modbus_shared_linklayer	*sharedlink;
-	uint8_t					*rxbuffer;
-	//rxbytesdef				rxlength;
-	TxRx16bitDef			rxlength;
-	CHStateEnum				chstate;
-	//uint16_t				rxseq;
+/*
+ * Receive data from serial or socket buffer
+ * [04/11/2014]
+ * Dynamic TxDelay created
+ * [04/03/2017]
+ * Modbus TCP support added
+ * [08/05/2019]
+ */
+chret_e Modbus_receive(STAARG_RX) {
+	stacom_t			*stacoms = staptr->stacoms;
+	channel_t			*chanptr = stacoms->chaninst;
+	Modbus_shlink_t		*sharedlink = stacoms->priv;
+	rxtxsize_t			rxlength;
+	chret_e				chstate = chret_empty;
+	uint16_t			rxval16;
 
 
-	//switch (staptr->realptype) {
-	//case ModbusslConst:
-		linklayer = ((Modbussl_pointers *) staptr->realprotocol)->linklayer;
-		sharedlink = ((Modbussl_pointers *) staptr->realprotocol)->sharedlink;
-		rxbuffer = sharedlink->rxbuff;
-	//	break;
+	rxbuff = sharedlink->rxbuff;	// We use our own Rx buffer
 
-	//case ModbusmaConst:
-	//	linklayer = ((Modbusma_pointers *) staptr->realprotocol)->linklayer;
-	//	sharedlink = ((Modbusma_pointers *) staptr->realprotocol)->sharedlink;
-	//	rxbuffer = sharedlink->rxbuff;
-	//	break;
-
-	//default:
-	//	return CHCommsEmpty;			// Unknown protocol, no message received
-	//}
-
-
-	// Rx state and byte counter reset required
-	//if (staptr->runflags & STARFLAG_RESET_RX_STATE) {
-	//	staptr->runflags &= ~STARFLAG_RESET_RX_STATE;
-	//	sharedlink->rxstate = Modbusrxheader;
-	//	sharedlink->expectedrxbytes = MODBUS_TCPHEADER_SIZE;
-	//}
-
-
-	switch (chanptr->chserstate) {
-	case enumchflush:
-	case enumchpretxdelay:
-		//flushrx(chanptr);			// Flush any data from the buffer if not in receive state
+	switch (stacoms->serstate) {
+	case ser_flush:
+	case ser_pretxdelay:
+	default:
+		station_flush(staptr);		// Flush any data if not in a receive state
 		break;
 
 
-	//case enumchreadyrx:
-	//case enumchreceiving:
-	default:
+	case ser_readyrx:
+		sharedlink->rxbytecnt = 0;	// This is initial state, reset byte count
+		if (STATION_ISSLAVE(staptr)) {
+			MAINF_SET_CTIMEOUT		// Set Timeout timer when first character is received
+		}
+		goto start_recv;
+
+
+	case ser_receiving:
+		start_recv:
 		switch (sharedlink->fformat) {
-		/*case ModbusTCP:
-			if (chanptr->chserstate == enumchreadyrx) {		// This is initial state, reset variables
-				sharedlink->rxstate = Modbusrxheader;
-				sharedlink->expectedrxbytes = MODBUS_TCPHEADER_SIZE;
-			}
-			ContinueTCP_receive:
-			switch (sharedlink->rxstate) {
-			case Modbusrxpayload:
-				rxlength = sharedlink->expectedrxbytes;
-				chstate = channelrx(
-							staptr,
-							rxbuffer + MODBUS_TCPHEADER_SIZE + sharedlink->rxapplen - sharedlink->expectedrxbytes,
-							&rxlength);
-					if (chstate != CHCommsRxTx) return chstate;		// Return if function hasn't received data
-
-
-					// Check if all data received
-					if (rxlength == sharedlink->expectedrxbytes) {
-						//IEC104_RXLOG_MACRO(IEC104_CLOG_INCOMING)
-						sharedlink->expectedrxbytes = MODBUS_TCPHEADER_SIZE;
-						sharedlink->rxstate = Modbusrxheader;
-						goto Modbusma_msgreceived;
-					}
-
-					// Not enough data received
-					else sharedlink->expectedrxbytes -= rxlength;
-					break;
-
-
-				default:
-				//case Modbusrxheader:
-					rxlength = sharedlink->expectedrxbytes;
-					chstate = channelrx(
-							staptr,
-							rxbuffer + MODBUS_TCPHEADER_SIZE - sharedlink->expectedrxbytes,
-							&rxlength);
-					if (chstate != CHCommsRxTx) return chstate;		// Return if function hasn't received data
-
-
-					// Check if all data received
-					if (rxlength == sharedlink->expectedrxbytes) {
-
-						// Validate transaction identifier
-						rxseq = rxbuffer[MODBUSOFFSET_TCPSEQ] << 8;
-						rxseq |= rxbuffer[MODBUSOFFSET_TCPSEQ + 1];
-						if (rxseq != linklayer->tcpseq) {			// Sequence number error
-							//IEC104_RXERRLOG_MACRO(clog104StartIDError, 1)
-							staptr->channelinst->chserstate = enumchflush;
-							sharedlink->expectedrxbytes = MODBUS_TCPHEADER_SIZE;
-							return CHCommsDataError;
-						}
-
-						// Validate Protocol ID
-						if (rxbuffer[MODBUSOFFSET_TCPPROTID] || rxbuffer[MODBUSOFFSET_TCPPROTID + 1]) {	// Protocol ID error
-							//IEC104_RXERRLOG_MACRO(clog104StartIDError, 1)
-							staptr->channelinst->chserstate = enumchflush;
-							sharedlink->expectedrxbytes = MODBUS_TCPHEADER_SIZE;
-							return CHCommsDataError;
-						}
-
-
-						sharedlink->rxapplen = rxbuffer[MODBUSOFFSET_TCPLEN] << 8;
-						sharedlink->rxapplen |= rxbuffer[MODBUSOFFSET_TCPLEN + 1];
-						if (sharedlink->rxapplen < MODBUS_HEADER_SIZE) {		// Minimal message length error
-							staptr->channelinst->chserstate = enumchflush;
-							sharedlink->expectedrxbytes = MODBUS_TCPHEADER_SIZE;
-							return CHCommsDataError;
-						}
-
-						//IEC104_RXLOG_MACRO(IEC104_CLOG_TRANSPORT)
-						sharedlink->expectedrxbytes = sharedlink->rxapplen;
-						sharedlink->rxstate = Modbusrxpayload;
-						goto ContinueTCP_receive;
-					}
-
-					// Not enough data received
-					else sharedlink->expectedrxbytes -= rxlength;
-					break;
-				}
-			break;*/
-
-
-		//case ModbusRTU:
-		default:
+		case ModbusTCP:
+			// Note: Our NumberMaxOfSeverTransaction is 1
+			// MODBUS Messaging on TCP/IP Implementation Guide V1.0b October 24, 2006 (page 28)
+			// Also we don't expect ModbusTCP message to be segmented in multiple TCP/UDP datagrams, this doesn't apply to ModbusRTU
 			rxlength = MODBUS_RXBUFF_SIZE;
-			if (chanptr->chserstate == enumchreadyrx)
-				sharedlink->rxbytecnt = 0;	// This is initial state, reset byte count
-			chstate = channelrx(staptr, rxbuffer + sharedlink->rxbytecnt, &rxlength);
-			if (chstate != CHCommsRxTx)
+			if ((chstate = station_receive(staptr, rxbuff, &rxlength)) != chret_rxtx)
 				return chstate;		// Return if function hasn't received data
-			sharedlink->rxbytecnt += rxlength;
-			MAINF_SET_10USEC(sharedlink->rxtimeout35, &staptr->channelinst->chchartimer);	// Reset idle timer after every received character
+
+
+			if (rxlength < MODBUS_TCPHEADER_SIZE) {
+				COMMS_TCPERRLOG(rxlength, "Received message length (%u) is too short, at least (%u) bytes expected", rxlength, MODBUS_TCPHEADER_SIZE)
+				goto rxerror;
+			}
+			else if (rxlength > MODBUS_TCP_MAX_SIZE) {
+				COMMS_TCPERRLOG(rxlength, clogrxlenoverflow, rxlength, MODBUS_TCP_MAX_SIZE)
+				goto rxerror;
+			}
+
+
+			if (sharedlink->tcpseq) {	// Slave doesn't have sequence number, thus no need to check
+				rxval16 = rxbuff[MODBUSOFFSET_TCPSEQ] << 8;
+				rxval16 |= rxbuff[MODBUSOFFSET_TCPSEQ + 1];
+				// We only support NumberMaxOfSeverTransaction=1, peer has to reply with the same sequence number
+				if (rxval16 != sharedlink->tcpseq) {		// Sequence number error
+					COMMS_TCPERRLOG(rxlength, "Incorrect sequence number (%u) received, expected (%u)", rxval16, sharedlink->tcpseq)
+					goto rxerror;
+				}
+			}
+
+
+			rxval16 = rxbuff[MODBUSOFFSET_TCPPROTID] << 8;
+			rxval16 |= rxbuff[MODBUSOFFSET_TCPPROTID + 1];
+			if (rxval16) {		// Protocol ID error
+				COMMS_TCPERRLOG(rxlength, "Unknown protocol ID (%u) received, expected (%u)", rxval16, 0)
+				goto rxerror;
+			}
+
+
+			sharedlink->rxbytecnt = rxbuff[MODBUSOFFSET_TCPLEN] << 8;
+			sharedlink->rxbytecnt |= rxbuff[MODBUSOFFSET_TCPLEN + 1];
+			if (sharedlink->rxbytecnt < MODBUS_HEADER_SIZE) {		// Minimal message length error
+				COMMS_TCPERRLOG(rxlength, "Received PDU length (%u) is too small, PDU should have at least (%u) bytes",
+						sharedlink->rxbytecnt, MODBUS_HEADER_SIZE)
+				goto rxerror;
+			}
+
+
+			// Note: Don't check if received length exceeds required message length!
+			// We only support NumberMaxOfSeverTransaction=1 which means if multiple messages are received in a TCP/UDP datagram
+			// Only the first one will be analyzed and any leftover data will be discarded.
+			if (rxlength < (sharedlink->rxbytecnt + MODBUS_TCPHEADER_SIZE)) {
+				COMMS_TCPERRLOG(rxlength, "PDU size (%u) doesn't match the PDU length variable (%u)", rxlength - MODBUS_TCPHEADER_SIZE, sharedlink->rxbytecnt)
+				goto rxerror;
+			}
 			break;
+
+
+		case ModbusASCII:
+			// TODO implement
+			break;
+
+
+		case ModbusRTU:
+			// We support segmented ModbusRTU messages over UART and arriving in multiple TCP/UDP datagrams, this doesn't apply to ModbusTCP
+			rxlength = MODBUS_RXBUFF_SIZE - (MODBUS_TCPHEADER_SIZE + sharedlink->rxbytecnt);
+			if ((chstate = station_receive(staptr, rxbuff + MODBUS_TCPHEADER_SIZE + sharedlink->rxbytecnt, &rxlength)) != chret_rxtx)
+				return chstate;		// Return if function hasn't received data
+
+			sharedlink->rxbytecnt += rxlength;
+
+			if (sharedlink->rxbytecnt > MODBUS_ADU_MAX_SIZE) {
+				COMMS_RXERRLOG(clogrxlenoverflow, sharedlink->rxbytecnt, MODBUS_ADU_MAX_SIZE)
+				goto rxerror;
+			}
+			TIMER_SET_10USEC(sharedlink->rxtimeout35, &stacoms->chartimer);	// Reset character timer after every received byte
+			break;
+
+
+		default:	// Unknown frame format
+			goto rxerror;
 		}
 		break;
 	}
 
 
-
-
-	//Modbusma_msgreceived:
-	switch (chanptr->chserstate) {
-	case enumchreadyrx:
-		chanptr->chserstate = enumchreceiving;	// Change state to receiving if any byte is received
+	switch (stacoms->serstate) {
+	case ser_readyrx:
+		stacoms->serstate = ser_receiving;	// Change state if any byte is received
 		break;
 	default:
 		break;
 	}
+	return chret_empty;
 
 
-
-
-	//switch (staptr->realptype) {
-	//case ModbusslConst:
-		return CHCommsRxTx;			// Message is successfully received
-
-	//case ModbusmaConst:
-	//	switch (sharedlink->fformat) {
-	//	case ModbusTCP:
-	//		if (Modbusma_analyze(staptr) == CHCommsRxTx) {
-	//			if (MAINF_NEXT_SERMASTER == LE_OK) {	// Next station enabled
-	//				staptr->channelinst->chserstate = enumchpretxdelay;
-	//				MAINF_SET_CHTXDELAY						// Set pre Tx delay timer
-	//			}
-	//			else return CHCommsDisabled;	// All stations disabled, close socket
-	//		}
-	//		return CHCommsRxTx;			// Message successfully received
-
-		//case ModbusRTU:
-	//	default:
-	//		return CHCommsEmpty;			// No action required
-	//	}
-	//	break;
-
-	//default:
-	//	break;
-	//}
-	return CHCommsEmpty;
+	rxerror:
+	stacoms->serstate = ser_flush;
+	station_flush(staptr);	// Flush any remaining data if error occurred
+	return chret_empty;		// Do not disconnect socket, just flush data
 }
 
 
-/***************************************************************************
-* Prepare Modbus protocol data for transmission
-* [20/02/2015]
-***************************************************************************/
-static TxRx16bitDef Modbussl_send(StatStr *staptr, uint8_t **txbuffptr) {
-	Modbus_linklayer		*linklayer;
-	Modbus_shared_linklayer	*sharedlink;
-	TxRx8bitDef				cnt;
-	TxRx16bitDef			txlength = 0;
-	//logflagdef				logflags = 0;
-	//logflagdef				chlogflags = 0;
+/*
+ * Prepare Modbus protocol data for transmission
+ * [07/11/2014]
+ * Outgoing modbus function 0x11 added
+ * [27/02/2015]
+ * Modbus TCP support added
+ * [08/05/2019]
+ */
+void Modbus_send(station_t *staptr, txrx8_t applen) {
+	stacom_t			*stacoms = staptr->stacoms;
+	channel_t			*chanptr = stacoms->chaninst;
+	Modbus_shlink_t		*sharedlink = stacoms->priv;
+	uint8_t				i;
+	uint8_t				*txptr = sharedlink->txbuff;
+	uint16_t 			crc = 0xffff;
 
 
-	linklayer = ((Modbussl_pointers *) staptr->realprotocol)->linklayer;
-	sharedlink = ((Modbussl_pointers *) staptr->realprotocol)->sharedlink;
-	*txbuffptr = sharedlink->rxbuff;
-
-
-	// Read Logger flags if logfile pointer exists
-	//if (staptr->logfile) logflags = staptr->logfile->lflags;
-	//if (staptr->channelinst->logfile) chlogflags = staptr->channelinst->logfile->lflags;
-
+	chanptr->txlen = 0;
 
 	switch (sharedlink->fformat) {
-	/*case ModbusTCP:
-		(*txbuffptr)[MODBUS_TCPHEADER_SIZE + MODBUSOFFSET_ADDR] = linklayer->devaddr;
+	case ModbusTCP:
+		if (!STATION_ISSLAVE(staptr)) {	// Slave doesn't have a sequence number, it shares Rx/Tx buffer and will reply with the received sequence number and protocol ID
+			sharedlink->tcpseq++;
+			if (!sharedlink->tcpseq)
+				sharedlink->tcpseq++;
+
+			txptr[MODBUSOFFSET_TCPSEQ] = (sharedlink->tcpseq >> 8) & 0xff;
+			txptr[MODBUSOFFSET_TCPSEQ + 1] = sharedlink->tcpseq & 0xff;
+			txptr[MODBUSOFFSET_TCPPROTID] = 0;
+			txptr[MODBUSOFFSET_TCPPROTID + 1] = 0;
+		}
+		txptr[MODBUSOFFSET_TCPLEN] = ((MODBUS_HEADER_SIZE + applen) >> 8) & 0xff;
+		txptr[MODBUSOFFSET_TCPLEN + 1] = (MODBUS_HEADER_SIZE + applen) & 0xff;
+		txptr[MODBUS_TCPHEADER_SIZE + MODBUSOFFSET_ADDR] = staptr->address;
+
+		chanptr->txlen = MODBUS_TCPHEADER_SIZE + MODBUS_HEADER_SIZE + applen;
+		chanptr->txptr = sharedlink->txbuff;
+		//chanptr->txlen = 5;
 		break;
+
 
 	case ModbusASCII:
 		// TODO convert address to ASCII
-		break;*/
-
-	//case ModbusRTU:
-	default:
-		(*txbuffptr)[MODBUSOFFSET_ADDR] = linklayer->devaddr;
-		sharedlink->crc = 0xFFFF;		// Reset CRC
-		buildCRC16(&sharedlink->crc, (*txbuffptr)[MODBUSOFFSET_ADDR]);
-		buildCRC16(&sharedlink->crc, (*txbuffptr)[MODBUSOFFSET_FUNC]);
-		break;
-	}
-
-
-	switch (sharedlink->fformat) {
-	/*case ModbusTCP:
-		txlength = MODBUS_TCPHEADER_SIZE + MODBUS_HEADER_SIZE + MODBUS_SREQ_SIZE;
 		break;
 
-	case ModbusASCII:
-		// TODO convert data to ASCII and calculate LRC
-		break;*/
 
-	//case ModbusRTU:
-	default:
-		for (cnt = 0; cnt < linklayer->txapplen; cnt++) {
-			buildCRC16(&sharedlink->crc, (*txbuffptr)[MODBUS_HEADER_SIZE + cnt]);
+	case ModbusRTU:
+		txptr = sharedlink->txbuff + MODBUS_TCPHEADER_SIZE;
+		txptr[MODBUSOFFSET_ADDR] = staptr->address;
+		MODBUS_CRC_CALC(txptr[MODBUSOFFSET_ADDR]);
+		MODBUS_CRC_CALC(txptr[MODBUSOFFSET_FUNC]);
+
+		for (i = 0; i < applen; i++) {
+			MODBUS_CRC_CALC(txptr[MODBUS_HEADER_SIZE + i]);
 		}
-		(*txbuffptr)[MODBUS_HEADER_SIZE + cnt] = sharedlink->crc & 0xFF;
-		(*txbuffptr)[MODBUS_HEADER_SIZE + cnt + 1] = (sharedlink->crc >> 8) & 0xFF;
-		txlength = MODBUS_HEADER_SIZE + linklayer->txapplen + MODBUS_CRC_SIZE;
+		txptr[MODBUS_HEADER_SIZE + i] = crc & 0xFF;
+		txptr[MODBUS_HEADER_SIZE + i + 1] = (crc >> 8) & 0xFF;
+		chanptr->txlen = MODBUS_HEADER_SIZE + applen + MODBUS_CRC_SIZE;
+		chanptr->txptr = sharedlink->txbuff + MODBUS_TCPHEADER_SIZE;
+		break;
+
+
+	default:
 		break;
 	}
-
-
-	//if (logflags & CLOGXF_OUTGOING) {
-	//	MODBUS_TXLOG_MACRO		// Station comms logger if enabled
-	//}
-	//if (chlogflags & CLOGXF_OUTGOING) {
-	//	MODBUS_TXHWLOG_MACRO	// Channel comms logger if enabled
-	//}
-	return txlength;			// No outgoing message prepared
+	COMMS_TXLOG		// Station and channel comms logger
 }
 
 
-/***************************************************************************
-* Modbus Slave protocol Offline
-* [23/02/2015]
-***************************************************************************/
-static void Modbussl_commserr(DRVARGDEF_COMMSERR) {
-	//Modbussl_pointers *realprot = (Modbussl_pointers *) staptr->realprotocol;
+#if ((MODBUSMA_TYPE == MODBUS_GENERIC) || (MODBUSSL_TYPE == MODBUS_GENERIC))
+/*
+ * Communication error entry point function
+ * [07/11/2014]
+ * Converted to timeout function
+ * [09/05/2019]
+ */
+void Modbus_timeout(station_t *staptr) {
+	stacom_t			*stacoms = staptr->stacoms;
+	Modbus_shlink_t		*sharedlink = stacoms->priv;
+	int					logtout = 1;
 
 
-	if (istimeout) {	// This is comms timeout
-		staptr->channelinst->chserstate = enumchreadyrx;		// Rx byte counters will be reset automatically at the beginning of receive function
-		//if (realprot->sharedlink->rxbytecnt) {
-			//IEC101_rxerrlog(staptr, realprot->sharedlink, clogrxTimeout);
-		//}
+	if (!STATION_ISSLAVE(staptr)) {
+		mastersta_commserr(staptr, 0);
+		SERVF_RXTOCNT	// Increment Rx timeout counter
+		if (stacoms->serstate != ser_receiving)
+			logtout = 0;
 	}
-}
 
 
-/***************************************************************************
-* Modbus Slave protocol main process
-* [19/02/2015]
-***************************************************************************/
-static CHStateEnum Modbussl_process(DRVARGDEF_MAINPROC) {
-	ChannelStr				*chanptr = staptr->channelinst;
-	Modbussl_pointers		*realprot;
-	//Modbus_linklayer		*linklayer;
-	Modbus_shared_linklayer	*sharedlink;
+#ifdef DEBUG_LOGEVERYTIMEOUT
+	logtout = 1;	// Log every Master timeout
+#endif
 
-
-	realprot = (Modbussl_pointers *) staptr->realprotocol;
-	sharedlink = realprot->sharedlink;
-
-
-	// All stations disabled or different station selected for channel
-	//if (sermasterprocess(staptr) == LE_FAIL) return CHCommsEmpty;	// This is not the station selected for channel or station is disabled
-
-
-	switch (chanptr->chserstate) {
-	case enumchflush:		// Error during rx, flush buffer
-	case enumchreadyrx:		// Waiting to receive first character
-		if (MAINF_CHECK_CHTIMER == LE_OK) {			// Check timeout
-			Modbussl_commserr(staptr, 1, 0);
-		}
-		break;
-
-
-	case enumchreceiving:	// We are currently receiving
-		switch (((Modbussl_pointers *) staptr->realprotocol)->sharedlink->fformat) {
-		/*case ModbusTCP:
-			if (MAINF_CHECK_CHTIMER == LE_OK) {			// Check timeout
-				Modbusma_commserr(staptr, 1, 0);
-				if (MAINF_NEXT_SERMASTER == LE_OK) {		// Next station enabled
-					goto Modbusma_new_message;
-				}
-				else return CHCommsDisabled;	// All stations disabled, close socket
-			}
-			break;*/
-
-		//case ModbusRTU:
-		default:
-			if (MAINF_CHECK_CHCHARTIMER == LE_OK) {		// Check idle after receive
-				if (Modbussl_analyze(staptr) == CHCommsRxTx) {
-					chanptr->chserstate = enumchpretxdelay;
-					MAINF_SET_CHTXDELAY						// Set pre Tx delay timer
-				}
-				else {	// Message analyze failed
-					if (MAINF_CHECK_CHTIMER == LE_OK) {		// Check timeout
-						Modbussl_commserr(staptr, 1, 0);
-					}
-					else {	// Timeout hasn't expired
-						chanptr->chserstate = enumchreadyrx;		// Rx byte counters will be reset automatically at the beginning of receive function
-					}
-				}
-			}
-			break;
-		}
-		break;
-
-
-	case enumchpretxdelay:	// Delay before transmission
-		if (MAINF_CHECK_CHTIMER == LE_OK) {	// Check pre Tx delay
-			goto Modbussl_new_message;
-		}
-		break;
-
-
-	default:	// Unknown state, reset to protocol default
-		chanptr->chserstate = enumchreadyrx;
-		break;
+	if (logtout) {
+		COMMS_RXERRLOG(clogrxTimeout);
 	}
-	return CHCommsEmpty;	// No outgoing message prepared
-
-
-
-
-	Modbussl_new_message:
-	//realprot = (Modbussl_pointers *) chanptr->serialsta->realprotocol;
-	//sharedlink = realprot->sharedlink;
-	//linklayer = realprot->linklayer;
-
-
-	/*switch (linklayer->commsstate) {
-	case Modbusrepeatlast:
-		break;
-
-	//case Modbuslinkok:
-	default:
-		linklayer->txapplen = Modbusma_build(
-				realprot->applayer,
-				realprot->txbuff + sharedlink->appoffset,
-				sharedlink->charmult);
-
-		if (!linklayer->txapplen) return CHCommsEmpty;	// No message prepared
-		break;
-	}*/
-
-
-	chanptr->chserstate = enumchflush;
-	MAINF_SET_CHTIMEOUT		// Activate Timeout timer
-	*txlength = Modbussl_send(chanptr->serialsta, txbuffptr);
-	return CHCommsRxTx;		// Transmit prepared message
+	sharedlink->rxbytecnt = 0;	// Reset receive pointer after logfile function call
 }
+#endif
 
 
-/***************************************************************************
-* Initialize Shared link layer structure
-* [30/09/2014]
-* Default t35 timeout initialization removed
-* [24/08/2015]
-***************************************************************************/
-static Modbus_shared_linklayer *Modbus_initshared(StatStr *currentsta) {
-	//StatStr	 				*staptr;
-	Modbus_shared_linklayer	*sharedlink;
+/*
+ * Initialize Shared link layer structure
+ * [30/09/2014]
+ * Default t35 timeout initialization removed
+ * [20/08/2015]
+ * Generalized to make compatible with Modbus Slave
+ * [19/04/2019]
+ */
+static Modbus_shlink_t *shared_init(station_t *staptr) {
+	Modbus_shlink_t		*sharedlink;
+	size_t				memsize = sizeof(*sharedlink) + MODBUS_TXBUFF_SIZE;
 
 
-	//for (staptr = Station0ptr; staptr; staptr = staptr->next) {
-		//if (
-		//		(staptr->chid == currentsta->chid) &&
-		//		(staptr->realptype == currentsta->realptype)) {
-		//	switch (staptr->realptype) {
-			//case ModbusslConst:
-			//	if (staptr->realprotocol) {
-			//		sharedlink = ((Modbussl_pointers *) staptr->realprotocol)->sharedlink;
-			//		if (sharedlink) return sharedlink;
-			//	}
-			//	break;
-
-			//case ModbusmaConst:
-			//	if (staptr->realprotocol) {
-			//		sharedlink = ((Modbusma_pointers *) staptr->realprotocol)->sharedlink;
-			//		if (sharedlink) return sharedlink;
-			//	}
-			//	break;
-
-			//default:
-			//	break;
-			//}
-		//}
-	//}
+	if (staptr->stacoms->priv)
+		return staptr->stacoms->priv;
 
 
-	// Existing shared structure is not found, initialize
-	sharedlink = calloc(1, sizeof(Modbus_shared_linklayer));
-	sharedlink->rxbuff = calloc(MODBUS_RXBUFF_SIZE, sizeof(uint8_t));
+	// Shared structure is not found, create new
+	if (!STATION_ISSLAVE(staptr))	// Slave has a shared Rx/Tx buffer
+		memsize += MODBUS_RXBUFF_SIZE;
+
+	if (!(sharedlink = calloc(1, memsize)))
+		return NULL;
+
+	staptr->stacoms->priv = sharedlink;
+	sharedlink->txbuff = (void *) (((leptr) sharedlink) + sizeof(*sharedlink));
+
+	if (STATION_ISSLAVE(staptr))	// Slave has a shared Rx/Tx buffer
+		sharedlink->rxbuff = sharedlink->txbuff;
+	else
+		sharedlink->rxbuff = sharedlink->txbuff + MODBUS_TXBUFF_SIZE;
 	return sharedlink;
 }
 
 
-/***************************************************************************
-* Initialize memory for Modbus slave protocol pointers
-* [19/02/2015]
-***************************************************************************/
-void Modbussl_preinit(GenProtocolStr *gprot, DevAddrDef devaddr) {
-	Modbussl_pointers	*realprot;
-	Modbussl_applayer	*applayer;
+/*
+ * Initialize memory for Modbus master protocol pointers
+ * [15/11/2014]
+ * Online check function generalized
+ * Get information address function removed, generalized in relatime.c
+ * [17/08/2016]
+ * Slave intialization added
+ * [04/06/2019]
+ */
+int Modbus_create(station_t *staptr, channel_t *chanptr) {
+	Modbus_shlink_t		*sharedlink;
 
 
-		realprot = calloc(1, sizeof(Modbussl_pointers));
-		gprot->statptr->realprotocol = realprot;
-		gprot->statptr->func_mainproc = Modbussl_process;
-		//gprot->statptr->func_chinit = Modbusma_chinit;
-		gprot->statptr->func_rx = Modbus_receive;
-		//gprot->statptr->func_commserr = Modbusma_commserr;
-		//gprot->statptr->func_onlinecheck = Modbus_onlinecheck;
-		realprot->linklayer = calloc(1, sizeof(Modbus_linklayer));
-		//realprot->txbuff = calloc(MODBUS_TXBUFF_SIZE, sizeof(uint8_t));
-		realprot->sharedlink = Modbus_initshared(gprot->statptr);
+	if (!(sharedlink = shared_init(staptr)))
+		return LE_FAIL;		// Out of memory
 
 
-		realprot->linklayer->commsstate = Modbuslinkok;
-		realprot->sharedlink->rxstate = Modbusrxheader;
-		realprot->linklayer->devaddr = devaddr;
-		//gprot->statptr->norespconst = MODBUS_DEFAULT_NORESPCNT;
-		//gprot->statptr->degradedconst = MODBUS_DEFAULT_DEGRADEDRETRIES;
-		//gprot->statptr->degradedtimeout = MODBUS_DEFAULT_DEGRADEDTIMEOUT;
-		applayer = Modbussl_preappinit();
-		realprot->applayer = applayer;
+#if ((MODBUSMA_TYPE == MODBUS_GENERIC) || (MODBUSSL_TYPE == MODBUS_GENERIC))
+	if (chanptr->uartinst) {
+		if (sharedlink->rxtimeout35 < 100) 	// Ensure timeout is at least 1ms
+			sharedlink->rxtimeout35 = 100;
+
+		if (sharedlink->rxtimeout35 < (MODBUS_RXT35CONST / chanptr->uartinst->baudrate))
+			sharedlink->rxtimeout35 = (MODBUS_RXT35CONST / chanptr->uartinst->baudrate);
+	}
+	else if (chanptr->socketinst) {
+		// Ensures socket is disconnected if nothing has been received from peer
+		if (chanptr->socketinst->idletsec == DEFAULT_UNUSEDT32)
+			chanptr->socketinst->idletsec = DEFAULT_SOCK_IDLETIMEOUT;
+	}
+#endif
 
 
-		gprot->applayer = applayer;
+	if (STATION_ISSLAVE(staptr)) {
+		staptr->stacoms->serstate = ser_readyrx;
+
+#if (MODBUSSL_TYPE == MODBUS_GENERIC)
+		staptr->offline1dsec = MODBUS_DEFAULT_OFFLINEDELAY;
+
+
+		sharedlink->fformat = ModbusRTU;
+		//sharedlink->fformat = ModbusTCP;
+#ifdef SLAVE_T35
+		sharedlink->rxtimeout35 = SLAVE_T35;
+#endif
+#endif
+	}
+	else {	// Master
+#if (MODBUSMA_TYPE == MODBUS_GENERIC)
+		staptr->norespconst = MODBUS_DEFAULT_NORESPCNT;
+		staptr->degradedconst = MODBUS_DEFAULT_DEGRADEDRETRIES;
+		staptr->degradedtimeout = MODBUS_DEFAULT_DEGRADEDTIMEOUT;
+
+		staptr->stacoms->serstate = ser_pretxdelay;
+#endif
+	}
+	return LE_OK;
 }
 
 
-/***************************************************************************
-* Initialize Modbus Slaver protocol memory
-* [23/02/2015]
-***************************************************************************/
-uint8_t Modbussl_postinit(GenProtocolStr *gprot, TimerConstDef t35, uint8_t mapsize) {
-	Modbussl_pointers *realprot = gprot->statptr->realprotocol;
+/*
+ * Finalize Modbus protocol initialization
+ * after XML configuration is processed
+ * [30/09/2014]
+ * Slave intialization added
+ * [09/04/2019]
+ */
+void Modbus_postinit(station_t *staptr) {
 
-
-	// Populate Application layer and check Common address first
-	Modbussl_postappinit(gprot->applayer, mapsize);
-
-	switch (realprot->sharedlink->fformat) {
-	/*case ModbusTCP:
-		realprot->sharedlink->appoffset = MODBUS_TCPHEADER_SIZE;
-		realprot->sharedlink->charmult = 1;
-		break;
-
-	case ModbusASCII:
-		realprot->sharedlink->appoffset = 1;
-		realprot->sharedlink->charmult = 2;
-		break;*/
-
-	//case ModbusRTU:
-	default:
-		realprot->sharedlink->appoffset = 0;
-		realprot->sharedlink->charmult = 1;
-		break;
-	}
-
-
-	//gprot->statptr->norespcnt = gprot->statptr->norespconst;		// Initialize no response counter
-	//gprot->statptr->degradedcnt = gprot->statptr->degradedconst;	// Initialize Degraded retry counter
-	//MAINF_SET_1SEC(gprot->statptr->offline1dsec, &gprot->statptr->offlinetimer); // Init Offline delay Timer
-	if (t35)
-		realprot->sharedlink->rxtimeout35 = t35;
-
-	return LE_OK;
+#if ((MODBUSMA_TYPE == MODBUS_GENERIC) || (MODBUSSL_TYPE == MODBUS_GENERIC))
+	staptr->norespcnt = staptr->norespconst;		// Initialize no response counter
+	staptr->degradedcnt = staptr->degradedconst;	// Initialize Degraded retry counter
+#endif
 }

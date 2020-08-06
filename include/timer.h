@@ -62,13 +62,10 @@
 /* Definition of watchdog macros *//*! \brief Check if Synchronization busy flag is set. */#define WDT_IsSyncBusy() ( WDT.STATUS & WDT_SYNCBUSY_bm )
 /*! \brief This macro resets the Watchdog Timer. */#define wdt_reset() __asm__ __volatile__ ("wdr")
 
-typedef struct finetmstr_ {
+typedef struct finetm_s {
+	timerconst_t			sec;					// Seconds
 	uint16_t				usec100;				// 100x Microseconds
-	TimerConstDef			sec;					// Seconds
-} finetmstr;
-
-
-//extern finetmstr FineTimer;
+} finetm_t;
 
 
 void clock_init();
@@ -83,8 +80,8 @@ uint8_t CLKSYS_Main_ClockSource_Select( CLK_SCLKSEL_t clockSource );
 
 void CCPWrite( volatile uint8_t * address, uint8_t value );
 
-void timerset_fine(TimerConstDef tconst, finetmstr *tptr);
-uint8_t timercheck_fine(finetmstr *tptr);
+void timerset_fine(timerconst_t tconst, finetm_t *tptr);
+uint8_t timercheck_fine(finetm_t *tptr);
 
 void wdt_enable( WDT_PER_t period );
 

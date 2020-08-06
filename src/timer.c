@@ -24,7 +24,7 @@
 #include "irq.h"
 
 
-finetmstr FineTimer;
+finetm_t FineTimer;
 
 
 #define FINETIMER_ENABLE_IRQ	FINETIMER_MCUTMR.INTCTRLA = FINETIMER_INTLVL;	// Enable interrupt
@@ -37,7 +37,7 @@ finetmstr FineTimer;
 ***************************************************************************/
 void clock_init() {
 #ifdef INTERNAL_32M_CLOCK
-	
+
 		CLKSYS_Enable(OSC_RC32KEN_bm);
 		CLKSYS_Enable(OSC_RC32MEN_bm);
 		CLKSYS_Enable(OSC_RC2MEN_bm);
@@ -47,7 +47,7 @@ void clock_init() {
 		CLKSYS_AutoCalibration_Enable( OSC_RC2MCREF_bm, 0 );
 		CLKSYS_AutoCalibration_Enable( OSC_RC32MCREF_bm, 0 );
 		CLKSYS_Main_ClockSource_Select(CLK_SCLKSEL_RC32M_gc);
-	
+
 #else
 		OSC.XOSCCTRL = OSC_XOSCSEL_EXTCLK_gc;		// External clock or external oscillator is selected
 		CLKSYS_Enable( OSC_XOSCEN_bm );				// Enables the selected external clock source
@@ -114,12 +114,12 @@ void CCPWrite( volatile uint8_t * address, uint8_t value )
 * Set timer constant
 * [19/02/2015]
 ***************************************************************************/
-void timerset_fine(TimerConstDef tconst, finetmstr *tptr) {
+void timerset_fine(timerconst_t tconst, finetm_t *tptr) {
 	uint16_t	tsec;
 
 
 	FINETIMER_DISABLE_IRQ				// Disable timer interrupt
-	finetmstr 	frozent = FineTimer;	// Need to freeze the timer as it can be updated by ISR any time;
+	finetm_t 	frozent = FineTimer;	// Need to freeze the timer as it can be updated by ISR any time;
 	FINETIMER_ENABLE_IRQ				// Enable timer interrupt
 
 	tsec = tconst / SEC_100USEC;
@@ -136,10 +136,10 @@ void timerset_fine(TimerConstDef tconst, finetmstr *tptr) {
 * Check timer overflow
 * [19/02/2015]
 ***************************************************************************/
-uint8_t timercheck_fine(finetmstr *tptr) {
+uint8_t timercheck_fine(finetm_t *tptr) {
 
 	FINETIMER_DISABLE_IRQ				// Disable timer interrupt
-	finetmstr 	frozent = FineTimer;	// Need to freeze the timer as it can be updated by ISR any time;
+	finetm_t 	frozent = FineTimer;	// Need to freeze the timer as it can be updated by ISR any time;
 	FINETIMER_ENABLE_IRQ				// Enable timer interrupt
 
 
@@ -213,6 +213,6 @@ uint8_t CLKSYS_Main_ClockSource_Select( CLK_SCLKSEL_t clockSource )
 			DFLLRC32M.CTRL |= DFLL_ENABLE_bm;
 		}
 	}
-	
-#endif 
+
+#endif
 

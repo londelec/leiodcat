@@ -30,34 +30,30 @@
 
 
 // Timer constants in 100x microseconds
-#define	POW_STARTUP_DELAY				20000		// MX28 3V8 on delay (default 2sec)
-#define	POW_SWITCHON_DELAY				10			// MX28 power switch assertion delay (default 1ms)
-#define	POW_SWITCH_DURATION				1000		// MX28 Power switch asserted duration at least 100ms as per i.MX28 Manual page 950 (100msec)
-#define	POW_REPOWER_DELAY				80000		// Wait before starting new power cycle (default 8sec)
-#define	POW_T100USEC					1			// 100usec constant
-#define	POW_T1MSEC						10			// 1msec constant
-#define	POW_T1SEC						10000		// 1sec constant
-#define	POW_HBLED_ON					500			// Heartbeat LED on period 0.05sec
-#define	POW_HBLED_OFF					10000		// Heartbeat LED off timer 1sec
+#define POW_STARTUP_DELAY				20000		// MX28 3V8 on delay (default 2sec)
+#define POW_SWITCHON_DELAY				10			// MX28 power switch assertion delay (default 1ms)
+#define POW_SWITCH_DURATION				1000		// MX28 Power switch asserted duration at least 100ms as per i.MX28 Manual page 950 (100msec)
+#define POW_REPOWER_DELAY				80000		// Wait before starting new power cycle (default 8sec)
+#define POW_T100USEC					1			// 100usec constant
+#define POW_T1MSEC						10			// 1msec constant
+#define POW_T1SEC						10000		// 1sec constant
+#define POW_HBLED_ON					500			// Heartbeat LED on period 0.05sec
+#define POW_HBLED_OFF					10000		// Heartbeat LED off timer 1sec
 // Milisecond counters
-#define	POW_VDDIO3V3_STABLE				5			// MX28 VDDIO_3V3 have to be present for this period before peripheral 3V3 is switched on (1sec)
+#define POW_VDDIO3V3_STABLE				5			// MX28 VDDIO_3V3 have to be present for this period before peripheral 3V3 is switched on (1sec)
 													// This is essential because switching on 3.3V power creates a voltage spikes which interferes with SD card read
-#define	POW_HB_ACTIVE					5			// Heartbeat pin must be active for this period (5msec)
-#define	POW_VDDIO3V3_TIMEOUT			100			// MX28 VDDIO_3V3 detection timeout after power switch release (0.1sec)
-#define	POW_HB_TIMEOUT					1500		// Heartbeat detection timeout after power switch release (1.5sec)
+#define POW_HB_ACTIVE					5			// Heartbeat pin must be active for this period (5msec)
+#define POW_VDDIO3V3_TIMEOUT			100			// MX28 VDDIO_3V3 detection timeout after power switch release (0.1sec)
+#define POW_HB_TIMEOUT					1500		// Heartbeat detection timeout after power switch release (1.5sec)
 													// It may take up to 1 sec to load the uBooot from SD card and execute the code where heartbeat pin is activated
 // Second counters
-#define	POW_MXIDLE						60			// MX28 idle state counter (60sec)
-
-
-// ADC constants
-#define	POWADC_3V2_VALUE				1588		// 3.2V / 2 / (VCC / 1.6V) * 2047 Default 3.2V ADC value
+#define POW_MXIDLE						60			// MX28 idle state counter (60sec)
 
 
 #define CTRL_PORT_INT_VECT				PORTK_INT1_vect	// port interrupt vector
 
 // Macros
-#define	POWMAN_RSTIDLE		MXpower.idlecnt = POW_MXIDLE;
+#define POWMAN_RSTIDLE		MXpower.idlecnt = POW_MXIDLE;
 
 
 typedef enum {
@@ -80,20 +76,17 @@ typedef struct MXpoweecfgStr_ {
 } MXpoweecfgStr;
 
 
-typedef struct MXpowStr_ {
+typedef struct MXpow_s {
 	powstateenum			state;					// Power state
-	finetmstr				timer;					// State timer
+	finetm_t				timer;					// State timer
 	uint16_t				poscnt;					// ADC sampling counter, increment if VDDIO is OK (above threshold)
 	uint16_t				tmotcnt;				// Timeout counter, increment if VDDIO is not present or heartbeat is not high
 	MXpoweecfgStr			cfg;					// Pin and analog threshold configuration
 	uint8_t					idlecnt;				// Idle counter, used to monitor MX activity
-} MXpowStr;
+} MXpow_t;
 
 
-
-
-// Version string made public to allow access from main
-extern MXpowStr MXpower;
+extern MXpow_t MXpower;
 
 
 void powman_init(void);

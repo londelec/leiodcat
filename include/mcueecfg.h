@@ -2,11 +2,14 @@
 ============================================================================
  Name        : mcueecfg.h
  Author      : AK
- Version     : V2.02
+ Version     : V3.00
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for MCU EEPROM configuration structures
 
   Change log :
+
+  *********V3.00 03/06/2018**************
+  EEPROM header is checked and updated in runtime now
 
   *********V2.02 07/09/2016**************
   Local function prototypes removed
@@ -39,7 +42,7 @@
 #include "modbussl.h"
 
 
-#define	MCUEE_EESIZE			EEPROM_SIZE			// Inbuilt EEPROM
+#define MCUEE_EESIZE			EEPROM_SIZE			// Inbuilt EEPROM
 
 
 // Macros
@@ -76,8 +79,8 @@
 
 
 // EEPROM specific type definitions
-typedef	uint16_t						eecfgsizeDef;		/* EEPROM configuration size definition */
-typedef	uint16_t						eegrpsizeDef;		/* EEPROM group size definition */
+typedef	uint16_t						eecfgsize_t;		// EEPROM configuration size definition
+typedef	uint16_t						eegrpsize_t;		// EEPROM group size definition
 
 
 // Warning, group IDs must not exceed 0x0F because
@@ -90,25 +93,25 @@ typedef enum {
 	eegren_board					= 0x08,				// Board settings, we want to keep it higher because hopefully it will be written to EEPROM last
 	eegren_last						= 0x0F,				// Last group enum
 	eegren_undefined				= 0xFF				// Undefined
-} LEOPACK mcueegrpenum;
+} LEOPACK mcueegrp_e;
 
 
 // Don't change existing enums, add new ones at the end
 // in order to preserve backward compatibility
 // Don't change naming convention, this will affect
 // configuration data initialization macro
-typedef enum {
+enum {
 	eedten_powman_empty				= 0,				// Empty
 	eedten_powman_thadc3v2			= 1,				// ADC threshold for 3V2 detection
 	eedten_powman_undefined			= 0xFF				// Undefined
-} LEOPACK mcueedpowmanenum;
+} LEOPACK;
 
 
 // Don't change existing enums, add new ones at the end
 // in order to preserve backward compatibility
 // Don't change naming convention, this will affect
 // configuration data initialization macro
-typedef enum {
+enum {
 	eedten_uart_empty				= 0,				// Empty
 	eedten_uart_baudrate			= 1,				// Baudrate
 	eedten_uart_parity				= 2,				// Parity, data bits, stop bit
@@ -118,14 +121,14 @@ typedef enum {
 	eedten_uart_address				= 6,				// Device address
 	eedten_uart_iface				= 7,				// Interface RS232/485/422
 	eedten_uart_undefined			= 0xFF				// Undefined
-} LEOPACK mcueeduartenum;
+} LEOPACK;
 
 
 // Don't change existing enums, add new ones at the end
 // in order to preserve backward compatibility
 // Don't change naming convention, this will affect
 // configuration data initialization macro
-typedef enum {
+enum {
 	eedten_board_empty				= 0,				// Empty
 	eedten_board_dimode00			= 0x10,				// DI modes
 	eedten_board_dimode01,
@@ -192,23 +195,23 @@ typedef enum {
 	eedten_board_dopul0E,
 	eedten_board_dopul0F,
 	eedten_board_undefined			= 0xFF				// Undefined
-} LEOPACK mcueedboardenum;
+} LEOPACK;
 
 
-typedef struct mcueeheader_ {
+typedef struct mcueeheader_s {
 	uint8_t					name[11];					// Configuration name e.g. LEIODC
 	uint8_t					revmajor;					// Revision major number
 	uint8_t					delimiter;					// Delimiter e.g.g dot '.'
 	uint8_t					revminor;					// Revision minor number
-	eecfgsizeDef			size;						// Size of all configuration including EE header, but excluding CRC
+	eecfgsize_t				size;						// Size of all configuration including EE header, but excluding CRC
 } mcueeheader;
 
 
 /*
 EEDTSTR_DEFINE(eeuartbaudrate,	uint16_t)				// UART baudrate
-EEDTSTR_DEFINE(eeuartparity,	atparitydef)			// UART parity, data bits, stop bit
-EEDTSTR_DEFINE(eeuarttxdelay,	atuarttodef)			// UART Tx delay in 100x microseconds
-EEDTSTR_DEFINE(eeuarttimeout,	atuarttodef)			// UART Timeout in 100x microseconds
+EEDTSTR_DEFINE(eeuartparity,	atparity_t)				// UART parity, data bits, stop bit
+EEDTSTR_DEFINE(eeuarttxdelay,	atuartto_t)				// UART Tx delay in 100x microseconds
+EEDTSTR_DEFINE(eeuarttimeout,	atuartto_t)				// UART Timeout in 100x microseconds
 EEDTSTR_DEFINE(eeuartt35,		uint16_t)				// UART t35 Timeout in 100x microseconds
 EEDTSTR_DEFINE(eeuartaddress,	DevAddrDef)				// Device address
 
@@ -223,19 +226,13 @@ EEDTSTR_DEFINE(eeboarddopul,	uint16_t)				// DO pulse duration
 */
 
 
-// EEPROM to register memory map table structure
-/*typedef struct eemapregTblStr_ {
-	atmappingenum			mapreg;
-	uint8_t					dataid;
-} eemapregTblStr;*/
-
-
-mcueegrpenum eedata_validate(atmappingenum mapreg, ModData16bitDef val, uint8_t *valid);
-uint8_t eeconf_crc(uint8_t updatecrc);
-uint8_t eeconf_get(mcueegrpenum groupid, uint8_t dataid, uint32_t *rddword, uint8_t *requpd);
-uint8_t eegroup_validate(mcueegrpenum groupid);
-void eeconf_update(ModbusRegStr *regmem);
-void eeconf_restructure(void);
+mcueegrp_e eedata_validate(atmapping_e mapreg, Moddata16_t val, uint8_t *valid);
+int eeconf_validate(int backup);
+int eeconf_get(mcueegrp_e groupid, uint8_t dataid, uint32_t *rddword);
+int eegroup_validate(mcueegrp_e groupid);
+void eeconf_update(Modbusreg_t *regmem);
+void eeconf_copy(int backup);
+void eeconf_rebuild(void);
 
 
 #endif /* MCUEECFG_H_ */

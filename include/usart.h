@@ -42,13 +42,11 @@
 
 
 
-void usart_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity, UartIntEnum uartif);
-void usartport_init(uartatstr *uartptr, USART_t *mcuuart, PORT_t *mcuport, PORT_t *ctrlport, uint8_t outputpin, uint8_t inputpin, uint8_t disabletx, uint8_t rtspin);
-void usarthw_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity, uint16_t bufsize);
+void usart_init(uartat_t *uartptr, atbaud_t baudrate, atparity_t parity, uartint_e uartif);
+void usartport_init(uartat_t *uartptr, USART_t *mcuuart, PORT_t *mcuport, PORT_t *ctrlport, uint8_t outputpin, uint8_t inputpin, uint8_t disabletx, uint8_t rtspin);
+void usarthw_init(uartat_t *uartptr, atbaud_t baudrate, atparity_t parity, uint16_t bufsize);
 
-CHStateEnum channelrx(StatStr *staptr, uint8_t *rxbuffer, TxRx16bitDef *rxlength);
-CHStateEnum channeltx(StatStr *staptr, uint8_t *txbuffer, TxRx16bitDef txlength);
-uint8_t checkrx(uartatstr *uartptr);
-
+chret_e channel_send(channel_t *chanptr);
+int rxfifo_check(uartat_t *uartptr);
 
 #endif /* USART_H_ */

@@ -2,11 +2,14 @@
  ============================================================================
  Name        : 74lv8153.c
  Author      : AK
- Version     : V1.04
+ Version     : V1.05
  Copyright   : Property of Londelec UK Ltd
  Description : LED driver module
 
   Change log :
+
+  *********V1.05 04/07/2019**************
+  Station communication structure created
 
   *********V1.04 07/09/2016**************
   Local functions marked static
@@ -38,30 +41,37 @@
 //#include "irq.h"
 
 
+#ifdef GLOBAL_DEBUG
+//#define DEBUG_LEDTEST
+#endif	// GLOBAL_DEBUG
+
+
 // Activate RESET pin
 #define LEDDRV_RESET_ACTIVATE ledport->OUTCLR = leddriver.resetpin;
 #define LEDDRV_RESET_RELEASE ledport->OUTSET = leddriver.resetpin;
 
-
-ic74lv8153str leddriver;
-
+#define LEDF_SET_TXDELAY timerset_fine(chanptr->chtxdelay, &leddriver.stacoms.comtimer);
 
 
+ic74lv8153_t leddriver;
 
-/***************************************************************************
-* Update LED indication, send data to 74LV8153
-* [25/02/2015]
-* Minor corrections, use shift instead of multiply
-* [24/08/2015]
-***************************************************************************/
+
+
+
+/*
+ * Update LED indication, send data to 74LV8153
+ * [25/02/2015]
+ * Minor corrections, use shift instead of multiply
+ * [24/08/2015]
+ */
 static void ledupdate(void) {
-	uint8_t					cnt;
-	uartatstr 				*uartptr = &leddriver.channel->usart;
+	uint8_t				i;
+	uartat_t 			*uartptr = &leddriver.channel->usart;
 
 
-	for (cnt = 0; cnt < LED_DRIVER_COUNT; cnt++) {
-		uartptr->rxtxbuff.fifo[((cnt + 1) << 1) - 1] = ((leddriver.leddata[cnt] & 0x0F) << 4) | (cnt << 1) | 1;
-		uartptr->rxtxbuff.fifo[(cnt + 1) << 1] = (leddriver.leddata[cnt] & 0xF0) | (cnt << 1) | 1;
+	for (i = 0; i < LED_DRIVER_COUNT; i++) {
+		uartptr->rxtxbuff.fifo[((i + 1) << 1) - 1] = ((leddriver.leddata[i] & 0x0F) << 4) | (i << 1) | 1;
+		uartptr->rxtxbuff.fifo[(i + 1) << 1] = (leddriver.leddata[i] & 0xF0) | (i << 1) | 1;
 	}
 
 
@@ -69,109 +79,98 @@ static void ledupdate(void) {
 	leddriver.ackflags = 0;					// Reset acknowledge flags
 	uartptr->rxtxbuff.outptr = 0;
 	uartptr->rxtxbuff.inptr = (LED_DRIVER_COUNT << 1);
-	leddriver.channel->chserstate = enumchflush;	// This state is used to ignore led update requests while data is being transmitted to 74LV8153
+	leddriver.stacoms.serstate = ser_flush;	// This state is used to ignore led update requests while data is being transmitted to 74LV8153
 	UART_ENABLE_DREIRQ		// Enable triggers the DRE interrupt immediately because TX register is empty
 }
 
 
-/***************************************************************************
-* Clear LED status registers
-* [26/02/2015]
-* Memset function used
-* [08/09/2016]
-***************************************************************************/
-/*void ledregclear(void) {
-
-	memset(leddriver.leddata, 0, LED_DRIVER_COUNT);
-}*/
-
-
-/***************************************************************************
-* PORT pin interrupts
-* [26/02/2015]
-***************************************************************************/
+/*
+ * PORT pin interrupts
+ * [26/02/2015]
+ */
 ISR(LED_PORT_INT_VECT) {
-	uint8_t			cnt;
+	uint8_t			i;
 
 
-	for (cnt = 0; cnt < LED_DRIVER_COUNT; cnt++) {
-		if (!(leddriver.channel->usart.port->IN & leddriver.soutpin[cnt])) {
-			leddriver.ackflags |= (1 << cnt);
+	for (i = 0; i < LED_DRIVER_COUNT; i++) {
+		if (!(leddriver.channel->usart.port->IN & leddriver.soutpin[i])) {
+			leddriver.ackflags |= (1 << i);
 		}
 	}
 }
 
 
-/***************************************************************************
-* Main process
-* [26/02/2015]
-* Port access optimized
-* [08/09/2016]
-***************************************************************************/
+/*
+ * Main process
+ * [26/02/2015]
+ * Port access optimized
+ * [08/09/2016]
+ */
 void leddrv_mainproc(void) {
-	ChannelStr		*chanptr = leddriver.channel;
+	channel_t		*chanptr = leddriver.channel;
 	PORT_t 			*ledport = chanptr->usart.port;
 
 
-	switch (chanptr->chserstate) {
-	case enumchreadyrx:		// Data transmission is complete, check ack flags set by SOUT pins
+	switch (leddriver.stacoms.serstate) {
+	case ser_readyrx:		// Data transmission is complete, check ack flags set by SOUT pins
 		if (leddriver.ackflags == ((1 << LED_DRIVER_COUNT) - 1)) {
 			leddriver.ackflags = 0;
-			chanptr->chserstate = enumchreceiving;	// Data has been sent successfully and acknowledged, check new request in a main loop
+			leddriver.stacoms.serstate = ser_receiving;		// Data has been sent successfully and acknowledged, check new request in a main loop
 		}
 		else {
 			LEDDRV_RESET_ACTIVATE					// Activate RESET pin
-			chanptr->chserstate = enumchpretxdelay;	// RESET pin is asserted, release after timeout and start transmission
-			MAINF_SET_CHTXDELAY						// Set pre Tx delay timer
+			leddriver.stacoms.serstate = ser_pretxdelay;	// RESET pin is asserted, release after timeout and start transmission
+			LEDF_SET_TXDELAY						// Set pre Tx delay timer
 		}
 		break;
 
 
-	case enumchpretxdelay:		// RESET pin is asserted, release after timeout and start transmission
-		if (MAINF_CHECK_CHTIMER == LE_OK) {	// Check delay
+	case ser_pretxdelay:		// RESET pin is asserted, release after timeout and start transmission
+		if (timercheck_fine(&leddriver.stacoms.comtimer) == LE_OK) {	// Check delay
 			LEDDRV_RESET_RELEASE					// Release RESET pin
 			ledupdate();
 		}
 		break;
 
 
-	case enumchreceiving:		// Check new update request
+	case ser_receiving:			// Check new update request
 		if (leddriver.rflags & LEDRF_UPDATE_LED) {
 			ledupdate();
 		}
 		break;
 
-	//case enumchflush:
+	case ser_flush:
 	default:					// Do nothing while data is being transmitted
 		break;
 	}
 }
 
 
-/***************************************************************************
-* Initialize UART for communication to 74LV8153
-* [25/02/2015]
-* New hardware 3100 without MX board
-* [17/08/2015]
-* Minor corrections, use shift instead of multiply
-* [24/08/2015]
-* SOUT pin interrupt level defined in irq.h now
-* [09/04/2016]
-* LED UART is always initialized
-* [08/09/2016]
-***************************************************************************/
+/*
+ * Initialize UART for communication to 74LV8153
+ * [25/02/2015]
+ * New hardware 3100 without MX board
+ * [17/08/2015]
+ * SOUT pin interrupt level defined in irq.h now
+ * [09/04/2016]
+ * LED UART is always initialized
+ * [08/09/2016]
+ * Station communication structure created
+ * [04/07/2019]
+ */
 void leddrv_init(void) {
-	ChannelStr		*chanptr;
-	uint8_t			cnt;
+	channel_t		*chanptr;
+	uint8_t			i;
 	PORT_t 			*ledport;
 	uint8_t			soutpinmask = 0;
 
 
-	chanptr = channelinit();				// Initialize new channel
+	chanptr = channel_create();
 	leddriver.channel = chanptr;
-	chanptr->chserstate = enumchpretxdelay;	// RESET pin is asserted, release after timeout and start transmission
+	chanptr->stacoms = &leddriver.stacoms;
+	leddriver.stacoms.serstate = ser_pretxdelay;	// RESET pin is asserted, release after timeout and start transmission
 	chanptr->chtxdelay = LED_RESET_HOLD;	// RESET pin asserted holding period
-	MAINF_SET_CHTXDELAY						// Set pre Tx delay timer
+	LEDF_SET_TXDELAY						// Set pre Tx delay timer
 	leddriver.ackflags = 0;					// Reset acknowledge flags
 
 
@@ -180,15 +179,16 @@ void leddrv_init(void) {
 	leddriver.soutpin[1] = PIN4_bm;
 	leddriver.resetpin = PIN6_bm;
 
-
+#ifdef DEBUG_LEDTEST
 	//leddriver.leddata[0] = 0x5A;
 	//leddriver.leddata[1] = 0xFA;
+#endif
 
 	usarthw_init(&chanptr->usart, 19200, 'N', (LED_DRIVER_COUNT << 1));
 
 
-	for (cnt = 0; cnt < LED_DRIVER_COUNT; cnt++) {
-		soutpinmask |= leddriver.soutpin[cnt];
+	for (i = 0; i < LED_DRIVER_COUNT; i++) {
+		soutpinmask |= leddriver.soutpin[i];
 	}
 	ledport = chanptr->usart.port;
 	ledport->OUTCLR = soutpinmask;				// Clear all SOUT pins

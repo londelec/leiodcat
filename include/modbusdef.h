@@ -2,11 +2,17 @@
 ============================================================================
  Name        : Modbusdef.h
  Author      : AK
- Version     : V1.02
+ Version     : V1.04
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for Modbus communication protocol definitions
 
-  Change log  :
+  Change log :
+
+  *********V1.04 11/04/2019**************
+  Fixed: Broadcast address changed to 0
+
+  *********V1.03 03/06/2018**************
+  AI modes changed
 
   *********V1.02 13/06/2015**************
   DI/AI/DO object processing modes added
@@ -34,22 +40,26 @@
 
 
 // Rx/Tx buffer pointers
-#define	MODBUSOFFSET_ADDR				0
-#define	MODBUSOFFSET_FUNC				1
-#define	MODBUSOFFSET_DATA				2
-#define	MODBUSOFFSET_TCPSEQ				0
-#define	MODBUSOFFSET_TCPPROTID			2
-#define	MODBUSOFFSET_TCPLEN				4
+#define MODBUSOFFSET_ADDR				0
+#define MODBUSOFFSET_FUNC				1
+#define MODBUSOFFSET_DATA				2
+#define MODBUSOFFSET_TCPSEQ				0
+#define MODBUSOFFSET_TCPPROTID			2
+#define MODBUSOFFSET_TCPLEN				4
 
-#define	MODBUS_HEADER_SIZE				2				// Message header size
-#define	MODBUS_SREQ_SIZE				4				// Single request message size
-#define	MODBUS_CRC_SIZE					2				// Message CRC size
-#define	MODBUS_TCPHEADER_SIZE			6				// Modbus TCP header size
-#define	MODBUS_CRC16_POLY				0xA001			// Modbus CRC16 polynomial
-#define	MODBUS_GLOBAL_ADDR				255				// Global address
+#define MODBUS_HEADER_SIZE				2				// Message header size
+#define MODBUS_SREQ_SIZE				4				// Single request message size
+#define MODBUS_MREQ_RBCSIZE				5				// Multipe request message register value, register count and byte count size
+#define MODBUS_CRC_SIZE					2				// Message CRC size
+#define MODBUS_TCPHEADER_SIZE			6				// Modbus TCP header size
+#define MODBUS_TCP_MAX_SIZE				260				// Maximal Modbus TCP ADU size (Header{6} + Device address{1} + PDU{253})
+#define MODBUS_ADU_MAX_SIZE				256				// Maximal Modbus RTU ADU size (Device address{1} + PDU{253} + CRC{2})
+#define MODBUS_CRC16_POLY				0xA001			// Modbus CRC16 polynomial
+#define MODBUS_BROADCAST_ADDR			0				// Broadcast address
+//#define MODBUS_UNUSED_ADDR				255				// Address used for Modbus TCP devices without Device address
 #define MODBUS_MAX_REGISTER_COUNT		125				// Maximal number of registers per message
 
-#define	MBB_EXCEPTION					0x80			// Modbus exception bit
+#define MBB_EXCEPTION					0x80			// Modbus exception bit
 
 
 // Byte offsets in application buffer
@@ -61,6 +71,7 @@
 #define MODBOFS_XREGH			(2)
 // Byte {3}
 #define MODBOFS_XREGL			(3)
+#define MODBOFS_11DATA			(3)
 // Byte {4}
 #define MODBOFS_04CNTH			(4)
 #define MODBOFS_06DATH			(4)
@@ -71,28 +82,24 @@
 #define MODBOFS_10CNTL			(5)
 // Dynamic data offsets
 #define MODBOFS_APPBYTES(moffset)	(2 + (moffset))
-#define MODBOFS_11DATH(moffset)		(3 + (moffset))
 #define MODBOFS_04DATH(moffset)		(3 + (moffset))
 #define MODBOFS_04DATL(moffset)		(4 + (moffset))
 #define MODBOFS_10DATH(moffset)		(7 + (moffset))
 #define MODBOFS_10DATL(moffset)		(8 + (moffset))
 
 
-
 // Size definitions for Modbus protocols
-typedef	uint8_t							DevAddrDef;		/* Device address size definition */
-typedef	uint8_t							ModFuncDef;		/* Modbus function size definition */
-typedef	uint8_t							ModReg8bitDef;	/* Modbus register 8bit size definition */
-typedef	uint16_t						ModReg16bitDef;	/* Modbus register 16bit size definition */
-typedef	uint8_t							ModData8bitDef;	/* Modbus data 8bit data size definition */
-typedef	uint16_t						ModData16bitDef;/* Modbus data 16bit data size definition */
-typedef	uint8_t							ModMsgDef;		/* Modbus message count size definition */
-typedef	uint16_t						ModCRCDef;		/* Modbus CRC size definition */
+typedef	uint8_t							Modaddr_t;		// Device address size definition
+typedef	uint8_t							Modfunc_t;		// Modbus function size definition
+typedef	uint8_t							Modreg8_t;		// Modbus register 8bit size definition
+typedef	uint16_t						Modreg16_t;		// Modbus register 16bit size definition
+typedef	uint8_t							Moddata8_t;		// Modbus data 8bit data size definition
+typedef	uint16_t						Moddata16_t;	// Modbus data 16bit data size definition
 
 
 
 
-typedef enum {
+enum {
 	MODFUNC_01							= 1,		// Read Coil Status
 	MODFUNC_02  						= 2,		// Read Input Status
 	MODFUNC_03							= 3,		// Read Holding Registers
@@ -118,10 +125,10 @@ typedef enum {
 	MODFUNC_18							= 24,		// Read FIFO Queue
 
 	MODFUNC_2B							= 43,		// Encapsulated Interface Transport
-} LEOPACK MODBUS_FUNC;
+} LEOPACK;
 
 
-typedef enum {
+enum {
 	MODEX_ILLEGAL_FUNC					= 1,
 	MODEX_ILLEGAL_DATA_ADDR 			= 2,
 	MODEX_ILLEGAL_DATA_VAL				= 3,
@@ -132,7 +139,7 @@ typedef enum {
 	MODEX_MEM_PARITY_ERR				= 8,
 	MODEX_GW_PATH_UNAVAILABLE			= 10,
 	MODEX_GW_TARGET_DEV_NORESP			= 11,
-} LEOPACK MODBUS_EXCPT;
+} LEOPACK;
 
 
 
@@ -143,18 +150,20 @@ typedef enum {
 typedef enum {
 	modbusdimden_spi					= 1,
 	modbusdimden_undefined				= 0xFFFF
-} LEOPACK modbusdimodeenum;
+} LEOPACK modbusdimode_e;
 
+// Input operation modes
 typedef enum {
-	modbusaimden_intbigend				= 1,
+	modbusaimden_sint					= 1,
+	modbusaimden_uintoffs				= 2,
 	modbusaimden_undefined				= 0xFFFF
-} LEOPACK modbusaimodeenum;
+} LEOPACK modbusaimode_e;
 
 // Output operation modes
 typedef enum {
 	modbusdomden_pulseout				= 1,
 	modbusdomden_undefined				= 0xFFFF
-} LEOPACK modbusdomodeenum;
+} LEOPACK modbusdomode_e;
 
 
 #endif /* MODBUSDEF_H_ */

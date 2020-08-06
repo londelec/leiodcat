@@ -11,6 +11,7 @@ C_SRCS += \
 ../src/modbus.c \
 ../src/modbussl.c \
 ../src/powman.c \
+../src/spi.c \
 ../src/timer.c \
 ../src/usart.c 
 
@@ -26,8 +27,12 @@ OBJS += \
 ./src/modbus.o \
 ./src/modbussl.o \
 ./src/powman.o \
+./src/spi.o \
 ./src/timer.o \
 ./src/usart.o 
+
+S_UPPER_DEPS += \
+./src/irqproc.d 
 
 C_DEPS += \
 ./src/74lv8153.d \
@@ -37,18 +42,16 @@ C_DEPS += \
 ./src/modbus.d \
 ./src/modbussl.d \
 ./src/powman.d \
+./src/spi.d \
 ./src/timer.d \
 ./src/usart.d 
-
-S_UPPER_DEPS += \
-./src/irqproc.d 
 
 
 # Each subdirectory must supply rules for building sources it contributes
 src/%.o: ../src/%.c
 	@echo 'Building file: $<'
 	@echo 'Invoking: AVR Compiler'
-	avr-gcc -I../include -D_GLOBAL_DEBUG -DEEPROM_CFG -D_DISABLE_BOARD_AUTOID -DMCUTYPE=AVR -Wall -O0 -fpack-struct -fshort-enums -ffunction-sections -fdata-sections -std=gnu99 -funsigned-char -funsigned-bitfields -mmcu=atxmega128a1 -DF_CPU=18432000UL -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@:%.o=%.d)" -c -o "$@" "$<"
+	avr-gcc -I../include -DEEPROM_CFG -D_DISABLE_BOARD_AUTOID -DMCUTYPE=AVR -Wall -O0 -fpack-struct -fshort-enums -ffunction-sections -fdata-sections -std=gnu99 -funsigned-char -funsigned-bitfields -mmcu=atxmega128a1 -DF_CPU=18432000UL -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@:%.o=%.d)" -c -o "$@" "$<"
 	@echo 'Finished building: $<'
 	@echo ' '
 

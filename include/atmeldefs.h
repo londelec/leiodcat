@@ -2,11 +2,14 @@
  ============================================================================
  Name        : atmeldefs.h
  Author      : AK
- Version     : V1.03
+ Version     : V1.04
  Copyright   : Property of Londelec UK Ltd
  Description : Definitions header file for Atmel MCU projects
 
   Change log :
+
+  *********V1.04 01/06/2018**************
+  New hardware enum 0040 added
 
   *********V1.03 07/09/2016**************
   New hardware enums 4000, 0400, 2200 added
@@ -34,12 +37,16 @@
 #include "ledefs.h"
 
 
-typedef	uint8_t						rxbytesdef;			/* recv/read/send function return size definition */
-typedef	uint32_t					TimerConstDef;		/* 32bit Timer Constant size definition */
-typedef	uint16_t					mcubitsetDef;		/* Bit set size definition */
-typedef	uint32_t					atbaudratedef;		/* Baudrate size definition */
-typedef	uint8_t						atparitydef;		/* Parity size definition */
-typedef	uint32_t					atuarttodef;		/* UART timeout size definition */
+#ifdef GLOBAL_DEBUG
+//#define DEBUG_AI3100
+#endif	// GLOBAL_DEBUG
+
+
+typedef	uint16_t					mcubitset_t;		/* Bit set size definition */
+typedef	uint32_t					atbaud_t;			/* Baudrate size definition */
+typedef	uint8_t						atparity_t;			/* Parity size definition */
+typedef	uint32_t					atuartto_t;			/* UART timeout size definition */
+typedef	char						prog_char;			/* Required since GCC AVR 4.9.2 */
 
 
 // IO definitions
@@ -55,38 +62,44 @@ typedef enum {
 	athwenundefined				= 0x00,		// Undefined hardware
 	athwenmx3100v11				= 0x01,		// IO=3100 PCB V1.1 V1.2 V1.3, MX presence detected with PIN_MXAUTOID [PK5]
 	athwenat3100v11				= 0x02,		// Legacy, used only for FW <= 1.04, No MX IO=3100 PCB V1.1 V1.2
+#ifdef DEBUG_AI3100
+	athwenat2200v10				= 0x08,		// IO=2200 PCB V1.0, MX presence detected with PIN_MXAUTOID [PK5]
+	athwenat0040v10				= 0x03,
+#else
 	athwenat2200v10				= 0x03,		// IO=2200 PCB V1.0, MX presence detected with PIN_MXAUTOID [PK5]
+	athwenat0040v10				= 0x08,		// IO=0040 PCB V1.0, MX presence detected with PIN_MXAUTOID [PK5]
+#endif
 	athwenat4000v10				= 0x04,		// IO=4000 PCB V1.0, MX presence detected with PIN_MXAUTOID [PK5]
 	athwenat0400v10				= 0x06,		// IO=0400 PCB V1.0, MX presence detected with PIN_MXAUTOID [PK5]
-} LEOPACK athwenum;
+} LEOPACK athw_e;
 
 
-typedef struct genbuffstr_ {
+typedef struct genbuff_s {
 	uint8_t					*fifo;
 	uint16_t				inptr;
 	uint16_t				outptr;
 	uint16_t				size;
-} genbuffstr;
+} genbuff_t;
 
 
-typedef struct uartledstr_ {
+typedef struct uartled_s {
 	PORT_t					*port;			// MCU port structure
 	uint8_t					rxled;			// RX led pin number
 	uint8_t 				txled;			// TX led pin number
 	uint8_t 				errled;			// Error led pin number
-} uartledstr;
+} uartled_t;
 
 
-typedef struct uartatstr_ {
+typedef struct uartat_s {
 	USART_t 				*mcuuart;		// Pointer to USART module to use
-	genbuffstr 				rxtxbuff;		// RX/TX buffer structure
+	genbuff_t 				rxtxbuff;		// RX/TX buffer structure
 	PORT_t	 				*port;			// MCU UART port
 	PORT_t	 				*ctrlport;		// MCU control port
 	uint8_t 				rtspin;			// RTS pin (0 - if not defined)
 	uint8_t 				disabletxpin;	// Disable Tx pin (while rebooting MX)
 	uint8_t 				flags;			// Runtime flags
-	uartledstr	 			*led;			// LED structure
-} uartatstr;
+	uartled_t	 			*led;			// LED structure
+} uartat_t;
 
 
 #endif /* AT_DEFS_H_ */

@@ -2,11 +2,14 @@
 ============================================================================
  Name        : board.h
  Author      : AK
- Version     : V1.03
+ Version     : V1.04
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for board hardware module
 
   Change log :
+
+  *********V1.04 01/06/2018**************
+  SPI configuration added
 
   *********V1.03 08/09/2016**************
   UART interface type added
@@ -49,7 +52,7 @@
 // Board runtime flags
 #define BOARDRF_EVENT				0x01
 #define BOARDRF_UPDATE_LED			0x02
-#define BOARDRF_EECONF_CORRUPTED	0x10			// EEPROM configuration is corrupted, i.e. CRC failed
+#define BOARDRF_EECONF_CORRUPTED	0x10			// EEPROM configuration is corrupted - CRC failed
 #define BOARDRF_DEFCONF				0x20			// Default configuration pin is asserted
 
 
@@ -59,28 +62,35 @@
 //#define bit_toggle(p,m) (p ^= (1 << m))
 
 
-typedef struct boardDIstr_ {
+typedef struct boardDI_s {
 	uint16_t				*samples;					// Sampling counter of each input
-	modbusdimodeenum		*mode;						// Operation mode of each input
+	modbusdimode_e			*mode;						// Operation mode of each input
 	uint16_t				*filterconst;				// Filter constant in miliseconds of each input
 	uint8_t					*bitoffset;					// Bit offset of each input
 	uint16_t				distates;					// Realtime DI states, mapped to MODBUS
 	uint8_t					count;						// Number of DI objects
-} boardDIstr;
+} boardDI_t;
 
 
-typedef struct boardDOstr_ {
+typedef struct boardDO_s {
 	uint16_t				*samples;					// Sampling counter of each output
-	modbusdomodeenum		*mode;						// Operation mode of each output
+	modbusdomode_e			*mode;						// Operation mode of each output
 	uint16_t				*pulsedur;					// Output pulse duration in miliseconds
 	uint8_t					*bitoffset;					// Bit offset of each output
 	uint16_t				dostates;					// Realtime DO states, mapped to MODBUS
 	uint16_t				updatereg;					// Mapped register for output update requests
 	uint8_t					count;						// Number of DO objects
-} boardDOstr;
+} boardDO_t;
 
 
-typedef struct boarduarteestr_ {
+typedef struct boardAI_s {
+	modbusaimode_e			*mode;						// Operation mode of each input
+	uint16_t				*uval;						// Unsigned integer value
+	uint8_t					count;						// Number of DO objects
+} boardAI_t;
+
+
+typedef struct boarduartee_s {
 	uint16_t 				bren16;						// Baudrate enum 16bit
 	uint16_t				timeoutl;					// Timeout lowword ! Don't swap these, this will break EEPROM layout
 	uint16_t				timeouth;					// Timeout highword ! Don't swap these, this will break EEPROM layout
@@ -90,32 +100,31 @@ typedef struct boarduarteestr_ {
 	uint16_t				parity;						// Parity
 	uint16_t 				devaddr;					// Device address
 	uint16_t 				uartif;						// UART interface
-} boarduarteestr;
+} boarduartee_t;
 
 
-typedef struct boardstr_ {
+typedef struct board_s {
 	float 					caltempf;					// Temperature calibration float value, for scaled temperature calculation
-	boardDIstr				*diptr;						// DI structure pointer, initialized if board has DIs
-	boardDOstr				*doptr;						// DO structure pointer, initialized if board has DOs
+	boardDI_t				*diptr;						// DI structure pointer, initialized if board has DIs
+	boardDO_t				*doptr;						// DO structure pointer, initialized if board has DOs
+	boardAI_t				*aiptr;						// AI structure pointer, initialized if board has AIs
 	PORT_t					*ctrlport;					// MCU control port
 	uint16_t				mapsize;					// Actual count of modbus mapped registers
-	mcubitsetDef			eeupdatebs;					// EEPROM configuration update bit set
-	mcubitsetDef			eerdmask;					// EEPROM read masks (bit set)
-	mcubitsetDef			eewrmask;					// EEPROM write masks (bit set)
+	mcubitset_t				eeupdatebs;					// EEPROM configuration update bit set
+	uint16_t				eesize;						// EEPROM configuration size
 	uint16_t 				tempscaled; 				// Temperature value, scaled
 	uint16_t 				caltemp85;					// Temperature calibration value from NVM
 	uint16_t 				resetreg;					// Software reset register
-	boarduarteestr	 		uartee;						// Main UART configuration
+	boarduartee_t	 		uartee;						// Main UART configuration
 	uint8_t					rflags;						// Runtime flags
 	uint8_t					ledoepin;					// Output enable (OE) pin of 74LV541
 	uint8_t					defcfgpin;					// Default configuration pin
-} boardstr;
+} board_t;
 
 
-extern boardstr boardio;
+extern board_t boardio;
 
 
-void boardisr_1ms(void);
 void board_mainproc(void);
 void board_init(void);
 

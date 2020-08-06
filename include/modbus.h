@@ -2,16 +2,19 @@
 ============================================================================
  Name        : Modbus.h
  Author      : AK
- Version     : V1.02
+ Version     : V2.00
  Copyright   : Property of Londelec UK Ltd
  Description : Header file for Modbus RTU communication protocol link layer module
 
   Change log :
 
-  *********V1.02 08/09/2016**************
+  *********V2.00 29/03/2019**************
+  Modbus TCP support added
+
+  *********V1.02 18/08/2016**************
   Local function prototypes removed
 
-  *********V1.01 24/08/2015**************
+  *********V1.01 20/08/2015**************
   Automatic t35 timeout calculation constant added
 
   *********V1.00 30/09/2014**************
@@ -26,83 +29,57 @@
 
 #include <stdint.h>
 
-#include "leiodcat.h"
 #include "modbusdef.h"
-#include "modbussl.h"
 
 
+// Compile options
+#define MODBUS_NONE			0		// Exclude protocol
+#define MODBUS_MCU			1		// Compile for MCU
+#define MODBUS_GENERIC		2		// Generic version
 
-
-#define	MODBUS_RXBUFF_SIZE				512				// Total Rx buffer size including link layer framing
-#define	MODBUS_TXBUFF_SIZE				256				// Total Tx buffer size including link layer framing
-
-#define	MODBUS_DEFAULT_NORESPCNT		5				// Default Master No Response counter value
-#define	MODBUS_DEFAULT_DEGRADEDRETRIES	5				// Default Master Degraded retry counter value
-#define	MODBUS_DEFAULT_DEGRADEDTIMEOUT	300				// Default Master Degraded timeout value in seconds
-//#define MODBUS_RXT35					100				// Default Modbus Rx idle timer in 100usec (10ms)
-#define MODBUS_RXT35CONST				350000			// Default Modbus Rx idle timeout conversion constant in 100usecs
-
+// Selected protocol options
+#ifdef MCUTYPE
+#define MODBUSSL_TYPE	MODBUS_MCU
+#define MODBUSMA_TYPE	MODBUS_NONE
+#include "leiodcat.h"
+#else
+#define MODBUSSL_TYPE	MODBUS_GENERIC
+#define MODBUSMA_TYPE	MODBUS_GENERIC
+#include "leandc.h"
+#endif
 
 
 // Modbus frame formats
 typedef enum {
-	ModbusRTU							= 1,			// Modbus RTU
-	ModbusTCP,											// Modbus TCP
-	ModbusASCII,										// Modbus ASCII
-} LEOPACK ModbusframeEnum;
+	ModbusRTU = 1,				// Modbus RTU
+	ModbusTCP,					// Modbus TCP
+	ModbusASCII,				// Modbus ASCII
+} Modbusframe_e;
 
 
-// ModbusTCP Rx states
-typedef enum {
-	Modbusrxheader						= 0,			// Modbus TCP header
-	Modbusrxpayload,									// Modbus TCP payload
-} LEOPACK ModbusrxstateEnum;
+typedef struct Modbus_shlink_s {
+	uint8_t					*rxbuff;				// Receive buffer
+	uint8_t					*txbuff;				// Transmit buffer
+	fddef					shfd;					// fd shared between stations
+	timerconst_t			rxtimeout35;			// Start received message processing if no char is received within this timeout (in 10us)
+	Modbusframe_e			fformat;				// Modbus frame format
+	union {
+		txrx16_t			rxbytecnt;				// Rx byte count during received message decoding for ModbusRTU and Modbus PDU size for ModbusTCP
+		txrx16_t			txapplen;				// Length of the PDU + address used for Modbus Slave only
+	};
+	seqno_t					tcpseq;					// TCP message sequence ID
+	//Modaddr_t				rxdevaddr;				// Received Device address
+} Modbus_shlink_t;
 
 
-// Communication states
-typedef enum {
-	Modbuslinkok						= 0,			// Communication link is ok
-	Modbusrepeatlast									// Repeat last sent message
-} LEOPACK ModbusCommsEnum;
-
-
-
-
-typedef struct  Modbus_shared_linklayer_ {
-	uint8_t						*rxbuff;				// Receive buffer
-	uint16_t					expectedrxbytes;		// Expected data length in Rx Buffer
-	ModbusrxstateEnum			rxstate;				// Message receiving state
-	TxRx16bitDef				rxapplen;				// Rx Application layer buffer length in bytes
-	DevAddrDef					rxdevaddr;				// Received Device address
-	TxRx16bitDef				rxbytecnt;				// Rx byte count during received message decoding
-	TimerConstDef				rxtimeout35;			// Start received message processing if no char is received within timeout (in 10us)
-	ModbusframeEnum				fformat;				// Modbus frame format
-	uint8_t						appoffset;				// Application buffer offset
-	uint8_t						charmult;				// Character size multiplier
-	uint16_t					crc;					// Calculated checksumm byte
-}  Modbus_shared_linklayer;
-
-
-typedef struct Modbus_linklayer_ {
-	DevAddrDef					devaddr;				// Device address
-	TxRx8bitDef					txapplen;				// Tx Application layer buffer length in bytes
-	uint16_t					tcpseq;					// TCP message sequence ID
-	ModbusCommsEnum				commsstate;				// Communications state
-	//Flags_8bit					linkflags;				// Link layer flags
-	//Flags_8bit					linkxmlflags;			// Link layer configuration flags
-} Modbus_linklayer;
-
-
-typedef struct Modbussl_pointers_ {
-	//uint8_t						*txbuff;				// Transmission buffer
-	Modbus_linklayer			*linklayer;				// Link layer pointer
-	Modbus_shared_linklayer		*sharedlink;			// Pointer to shared link layer structure
-	Modbussl_applayer			*applayer;				// Application layer pointer
-} Modbussl_pointers;
-
-
-void buildCRC16(uint16_t *crc, uint8_t databyte);
-void Modbussl_preinit(GenProtocolStr *gprot, DevAddrDef devaddr);
-uint8_t Modbussl_postinit(GenProtocolStr *gprot, TimerConstDef t35, uint8_t mapsize);
+#if MODBUSMA_TYPE
+chret_e Modbusma_rx_check(station_t *staptr, txrx8_t *datalength);
+#endif
+chret_e Modbussl_rx_check(station_t *staptr, txrx8_t *datalength, int *enabledf);
+void Modbus_send(station_t *staptr, txrx8_t applen);
+chret_e Modbus_receive(STAARG_RX);
+void Modbus_timeout(station_t *staptr);
+int Modbus_create(station_t *staptr, channel_t *chanptr);
+void Modbus_postinit(station_t *staptr);
 
 #endif /* MODBUS_H_ */

@@ -2,11 +2,14 @@
  ============================================================================
  Name        : usart.c
  Author      : AK
- Version     : V1.04
+ Version     : V1.05
  Copyright   : Property of Londelec UK Ltd
  Description : Atmel UART module
 
   Change log :
+
+  *********V1.05 04/07/2019**************
+  Fixed: don't check rx fifo while receiver is disabled
 
   *********V1.04 07/09/2016**************
   Local functions marked static
@@ -40,6 +43,7 @@
 
 #ifdef GLOBAL_DEBUG
 //#define DEBUG_NOUARTTX
+//#define DEBUG_AI3100
 #endif	// GLOBAL_DEBUG
 
 
@@ -108,7 +112,7 @@
 * Allocate space in the buffer for next byte
 * [18/02/2015]
 ***************************************************************************/
-static uint8_t pushfifo(genbuffstr *buffer, uint8_t discardold) {
+static uint8_t pushfifo(genbuff_t *buffer, uint8_t discardold) {
 
 	if (buffer->inptr == buffer->outptr) {
 		buffer->inptr++;
@@ -165,7 +169,7 @@ static uint8_t pushfifo(genbuffstr *buffer, uint8_t discardold) {
 * Get pointer to next entry in the buffer
 * [18/02/2015]
 ***************************************************************************/
-static uint8_t popfifo(genbuffstr *buffer) {
+static uint8_t popfifo(genbuff_t *buffer) {
 
 	if (buffer->inptr == buffer->outptr)
 		return LE_FAIL;		// FIFO already empty
@@ -197,7 +201,7 @@ static uint8_t popfifo(genbuffstr *buffer) {
 * RTS pin inversion moved to this function
 * [08/09/2016]
 ***************************************************************************/
-void usartport_init(uartatstr *uartptr, USART_t *mcuuart, PORT_t *mcuport, PORT_t *ctrlport, uint8_t outputpin, uint8_t inputpin, uint8_t disabletx, uint8_t rtspin) {
+void usartport_init(uartat_t *uartptr, USART_t *mcuuart, PORT_t *mcuport, PORT_t *ctrlport, uint8_t outputpin, uint8_t inputpin, uint8_t disabletx, uint8_t rtspin) {
 
 	uartptr->mcuuart = mcuuart;				// MCU UART pointer
 	uartptr->port = mcuport;				// MCU UART port
@@ -226,7 +230,7 @@ void usartport_init(uartatstr *uartptr, USART_t *mcuuart, PORT_t *mcuport, PORT_
 * Fixed: bselval changed to 16bit
 * [19/08/2015]
 ***************************************************************************/
-void usarthw_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity, uint16_t bufsize) {
+void usarthw_init(uartat_t *uartptr, atbaud_t baudrate, atparity_t parity, uint16_t bufsize) {
 	uint16_t 		bselval;
 
 
@@ -261,46 +265,65 @@ void usarthw_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity
 }
 
 
-/***************************************************************************
-* Generic receive function
-* [18/02/2015]
-***************************************************************************/
-CHStateEnum channelrx(StatStr *staptr, uint8_t *rxbuffer, TxRx16bitDef *rxlength) {
-	uartatstr 				*uartptr = &staptr->channelinst->usart;
-	TxRx16bitDef			cnt;
+/*
+ * Flush any socket data station has received
+ * [04/07/2019]
+ */
+chret_e station_flush(station_t *staptr) {
+	uartat_t 		*uartptr = &staptr->stacoms->chaninst->usart;
 
 
-	for (cnt = 0;; cnt++) {
-		if (popfifo(&uartptr->rxtxbuff) == LE_OK) {
-			rxbuffer[cnt] = uartptr->rxtxbuff.fifo[uartptr->rxtxbuff.outptr];
-		}
-		else
-			break;
-	}
-	*rxlength = cnt;
-	if (cnt)
-		return CHCommsRxTx;
-	return CHCommsEmpty;
+	uartptr->rxtxbuff.inptr = 0;
+	uartptr->rxtxbuff.outptr = 0;
+	return chret_empty;
 }
 
 
-/***************************************************************************
-* Generic channel send function wrapper
-* [18/02/2015]
-***************************************************************************/
-CHStateEnum channeltx(StatStr *staptr, uint8_t *txbuffer, TxRx16bitDef txlength) {
-	uartatstr 				*uartptr = &staptr->channelinst->usart;
-	TxRx16bitDef			cnt;
+/*
+ * Genreic station receive function
+ * [18/02/2015]
+ * Argument changed to station pointer
+ * [03/07/2019]
+ */
+chret_e station_receive(station_t *staptr, uint8_t *rxbuff, txrx16_t *rxlength) {
+	uartat_t 		*uartptr = &staptr->stacoms->chaninst->usart;
+	txrx16_t		i = 0;
+
+
+	while ((popfifo(&uartptr->rxtxbuff) == LE_OK)) {
+		rxbuff[i] = uartptr->rxtxbuff.fifo[uartptr->rxtxbuff.outptr];
+		i++;
+	}
+
+	*rxlength = i;
+	if (i)
+		return chret_rxtx;
+
+	return chret_empty;
+}
+
+
+/*
+ * Send data to Channel
+ * [18/02/2015]
+ * Argument changed to channel pointer
+ * [03/07/2019]
+ */
+chret_e channel_send(channel_t *chanptr) {
+	uartat_t 		*uartptr = &chanptr->usart;
+	txrx16_t		i;
 
 
 	uartptr->rxtxbuff.inptr = 0;
 	uartptr->rxtxbuff.outptr = 0;
 
-	for (cnt = 0; cnt < txlength; cnt++) {
+
+	for (i = 0; i < chanptr->txlen; i++) {
 		if (pushfifo(&uartptr->rxtxbuff, 0) == LE_OK) {		// We have adopted the 'preserve buffer contents' policy here
-			uartptr->rxtxbuff.fifo[uartptr->rxtxbuff.inptr] = txbuffer[cnt];
+			uartptr->rxtxbuff.fifo[uartptr->rxtxbuff.inptr] = chanptr->txptr[i];
 		}
-		else return CHCommsEmpty;
+		else
+			return chret_empty;
 	}
 
 
@@ -308,28 +331,32 @@ CHStateEnum channeltx(StatStr *staptr, uint8_t *txbuffer, TxRx16bitDef txlength)
 	UART_RTS_ACTIVATE		// Activate RTS pin if defined
 	UART_RX_DISABLE			// Disable receiver
 	UART_ENABLE_DREIRQ		// Enable triggers the DRE interrupt immediately because TX register is empty
-	return CHCommsRxTx;
+	return chret_rxtx;
 }
 
 
-/***************************************************************************
-* Check if UART has received data
-* [20/02/2015]
-***************************************************************************/
-uint8_t checkrx(uartatstr *uartptr) {
+/*
+ * Check if UART has received data
+ * [20/02/2015]
+ * Fixed: don't check rx fifo while receiver is disabled
+ * [04/07/2019]
+ */
+int rxfifo_check(uartat_t *uartptr) {
 
-	if (uartptr->rxtxbuff.inptr == uartptr->rxtxbuff.outptr)
-		return LE_FAIL;
+	if (
+			(uartptr->mcuuart->CTRLB & USART_RXEN_bm) &&
+			(uartptr->rxtxbuff.inptr != uartptr->rxtxbuff.outptr))
+		return LE_OK;
 
-	return LE_OK;
+	return LE_FAIL;
 }
 
 
-/***************************************************************************
-* UART receive ISR
-* [18/02/2015]
-***************************************************************************/
-static void uartisr_rx(uartatstr *uartptr) {
+/*
+ * UART receive ISR
+ * [18/02/2015]
+ */
+static void uartisr_rx(uartat_t *uartptr) {
 
 	if (pushfifo(&uartptr->rxtxbuff, 0) == LE_OK) {		// We have adopted the 'preserve buffer contents' policy here
 		uartptr->rxtxbuff.fifo[uartptr->rxtxbuff.inptr] = uartptr->mcuuart->DATA;	// Store received data byte in fifo
@@ -342,19 +369,16 @@ static void uartisr_rx(uartatstr *uartptr) {
 }
 
 
-/***************************************************************************
-* UART transmission complete ISR
-* [18/02/2015]
-* Minor cleanup
-* [24/08/2015]
-* Enable receiver only if UART is supposed to receive
-* [08/04/2016]
-***************************************************************************/
-static void usartisr_txcomplete(uartatstr *uartptr) {
+/*
+ * UART transmission complete ISR
+ * [18/02/2015]
+ * Enable receiver only if UART is supposed to receive
+ * [08/04/2016]
+ */
+static void usartisr_txcomplete(uartat_t *uartptr) {
 
 	uartptr->rxtxbuff.inptr = 0;
 	uartptr->rxtxbuff.outptr = 0;
-
 
 	UART_RTS_RELEASE		// Release RTS pin if defined
 	UART_TXLED_OFF			// Turn off the TX LED if defined
@@ -362,24 +386,24 @@ static void usartisr_txcomplete(uartatstr *uartptr) {
 	uartptr->mcuuart->CTRLA &= ~USART_TXCINTLVL_gm;	// Disable TXC interrupt
 
 	if (!(uartptr->flags & UARTRTF_NORX))
-		uartptr->mcuuart->CTRLB |= USART_RXEN_bm;	// Enable Receiver
+		UART_RX_ENABLE		// Enable Receiver
 }
 
 
-/***************************************************************************
-* UART TX register empty ISR
-* Load next byte into TX register
-* [18/02/2015]
-* Fixed: Reset TXCIF flag before enabling TXC interrupt
-* [24/08/2015]
-* Fixed: Must enable TXC interrupt when loading last byte
-* The problem occurred when TXC and DRE interrupts happened at the same time.
-* DRE being higher priority was serviced first and it cleared TXCIF status bit.
-* After returning from DRE, TXCIF bit was no longer set which lead to TXC interrupt
-* never being serviced.
-* [09/04/2016]
-***************************************************************************/
-static void usartisr_dataregempty(uartatstr *uartptr) {
+/*
+ * UART TX register empty ISR
+ * Load next byte into TX register
+ * [18/02/2015]
+ * Fixed: Reset TXCIF flag before enabling TXC interrupt
+ * [24/08/2015]
+ * Fixed: Must enable TXC interrupt when loading last byte
+ * The problem occurred when TXC and DRE interrupts happened at the same time.
+ * DRE being higher priority was serviced first and it cleared TXCIF status bit.
+ * After returning from DRE, TXCIF bit was no longer set which lead to TXC interrupt
+ * never being serviced.
+ * [09/04/2016]
+ */
+static void usartisr_dataregempty(uartat_t *uartptr) {
 	uint8_t 		txbyte;
 
 
@@ -401,15 +425,16 @@ static void usartisr_dataregempty(uartatstr *uartptr) {
 }
 
 
-/***************************************************************************
-* USART interrupts
-* [25/02/2015]
-* Return if irq number is not recognized
-* [08/04/2016]
-***************************************************************************/
+/*
+ * USART interrupts
+ * [25/02/2015]
+ * Return if irq number is not recognized
+ * [08/04/2016]
+ */
 ISR(UART_GENERIC_IRQ_VECTOR) {
-	ChannelStr		*chanptr;
+	channel_t		*chanptr;
 	USART_t 		*requart;
+	stacom_t		*stacoms;
 
 
 	switch (irqasmenum) {
@@ -446,8 +471,9 @@ ISR(UART_GENERIC_IRQ_VECTOR) {
 			case USARTC1_TXC_vect_num:
 			case USARTE1_TXC_vect_num:
 				usartisr_txcomplete(&chanptr->usart);
-				chanptr->chserstate = enumchreadyrx;
-				MAINF_SET_CHTIMEOUT		// Activate Timeout timer
+				stacoms = chanptr->stacoms;
+				stacoms->serstate = ser_readyrx;
+				MAINF_SET_CTIMEOUT		// Activate Timeout timer
 				break;
 
 			default:
@@ -459,19 +485,18 @@ ISR(UART_GENERIC_IRQ_VECTOR) {
 }
 
 
-/***************************************************************************
-* Initialize UART
-* [18/02/2015]
-* New hardware 3100 without MX board
-* RTS pin control added
-* [20/08/2015]
-* Rx interrupt level defined in irq.h now
-* [09/04/2016]
-* UART interface type added
-* [08/09/2016]
-***************************************************************************/
-void usart_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity, UartIntEnum uartif) {
-
+/*
+ * Initialize UART
+ * [18/02/2015]
+ * New hardware 3100 without MX board
+ * RTS pin control added
+ * [20/08/2015]
+ * Rx interrupt level defined in irq.h now
+ * [09/04/2016]
+ * UART interface type added
+ * [08/09/2016]
+ */
+void usart_init(uartat_t *uartptr, atbaud_t baudrate, atparity_t parity, uartint_e uartif) {
 
 	if (MainLeiodc.hw & ATHWF_MXBOARD) {	// MX board present
 #ifdef DEBUG_NOUARTTX
@@ -481,8 +506,12 @@ void usart_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity, 
 #endif
 	}
 	else {	// IO module without MX board
+#ifdef DEBUG_AI3100
+		goto nocontrol;
+#else
 		MCUP_IFACE.OUT = 0x60;				// All interfaces disabled RS232[7] = 0; RS485[6] = 1; RS422[5] = 1
 		MCUP_IFACE.DIRSET = MASK_UIFACE;	// Make pins [5..7] outputs
+#endif
 
 		switch (uartif) {
 		case RS232:
@@ -495,7 +524,7 @@ void usart_init(uartatstr *uartptr, atbaudratedef baudrate, atparitydef parity, 
 			usartport_init(uartptr, &USARTE1, &MCUP_UART, 0, PIN_TXD, PIN_RXD, 0, 0);
 			break;
 
-		//case RS485:
+		case RS485:
 		default:
 			UART_RS485_ON
 			usartport_init(uartptr, &USARTE1, &MCUP_UART, &MCUP_CTRL, PIN_TXD, PIN_RXD, 0, PIN_RTS);

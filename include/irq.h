@@ -2,11 +2,14 @@
  ============================================================================
  Name        : irq.h
  Author      : AK
- Version     : V1.00
+ Version     : V1.01
  Copyright   : Property of Londelec UK Ltd
  Description : Interrupt definitions header
 
   Change log :
+
+  *********V1.01 01/06/2018**************
+  SPI interrupt added
 
   *********V1.00 09/04/2016**************
   Initial revision
@@ -29,6 +32,7 @@
 #define FINETIMER_INTLVL	TC0_OVFINTLVL0_bm			// 100us timer, used as general timer - low level
 #define TIMER1MS_INTLVL		TC1_OVFINTLVL0_bm			// 1ms timer, used for IO pin processing - low level
 #define POWMANHB_INTLVL		PORT_INT1LVL_LO_gc			// Powman MX heartbeat pin interrupt - low level
+#define SPI_INTLVL			SPI_INTLVL0_bm				// SPI interrupt - low level
 
 
 #endif /* AT_IRQ_H_ */

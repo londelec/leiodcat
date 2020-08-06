@@ -2,11 +2,14 @@
  ============================================================================
  Name        : powman.c
  Author      : AK
- Version     : V1.04
+ Version     : V1.05
  Copyright   : Property of Londelec UK Ltd
  Description : Power management for MX28 board
 
   Change log :
+
+  *********V1.05 24/07/2020**************
+  Don't wait 2sec after entering Idle state if no MX board is present
 
   *********V1.04 07/09/2016**************
   MX board flag created
@@ -52,8 +55,11 @@
 #endif	// GLOBAL_DEBUG
 
 
-MXpowStr MXpower;
+// ADC constants
+#define POWADC_3V2_VALUE				1588		// 3.2V / 2 / (VCC / 1.6V) * 2047 Default 3.2V ADC value
 
+
+MXpow_t MXpower;
 
 
 // Macros
@@ -71,22 +77,24 @@ MXpowStr MXpower;
 #define POWMANF_CHECK_MTIMER timercheck_fine(&MXpower.timer)
 
 
-/***************************************************************************
-* Initialize power manager module
-* [04/03/2015]
-* New hardware 3100 without MX board
-* Heartbeat output pin created
-* [19/08/2015]
-* Heartbeat pin interrupt level defined in irq.h now
-* [09/04/2016]
-* MX board flag created
-* [07/09/2016]
-***************************************************************************/
+/*
+ * Initialize power manager module
+ * [04/03/2015]
+ * New hardware 3100 without MX board
+ * Heartbeat output pin created
+ * [19/08/2015]
+ * Heartbeat pin interrupt level defined in irq.h now
+ * [09/04/2016]
+ * MX board flag created
+ * [07/09/2016]
+ * Wait only 1ms on startup if no MX board is present
+ * [24/07/2020]
+ */
 void powman_init(void) {
 	uint32_t			eedword;
 
 
-	memset(&MXpower, 0, sizeof(MXpower));				// Clean powman structure
+	LEF_MEMZEROS(MXpower);
 	MXpower.state = powst_init;
 	POWMANF_SET_MTIMER(POW_STARTUP_DELAY)				// Set 3V8 enable delay constant
 
@@ -133,21 +141,20 @@ void powman_init(void) {
 		MXpower.cfg.pin3v8gate = PIN5_bm;				// 3V8_POWER_GATE
 		MXpower.cfg.pinpowsw = PIN7_bm;					// POWERON_GATE
 	}
-	else {
+	else {	// Standalone, no MX board present
 		BOARD_VDDIOCH.MUXCTRL = ADC_CH_MUXPOS_PIN1_gc;	// PORTA pin 1 selected
 		MXpower.cfg.pinhbout = PIN0_bm;					// MB_SSP3_MISO
 		MXpower.state = powst_idle;
+		POWMANF_SET_MTIMER(POW_T1MSEC)					// No need to wait, arbitrary 1ms delay
 	}
 #endif
 
 
-	if (eeconf_get(eegren_powman, eedten_powman_thadc3v2, &eedword, NULL) == LE_OK) {
+	if (eeconf_get(eegren_powman, eedten_powman_thadc3v2, &eedword) == LE_OK)
 		MXpower.cfg.thadc3v2 = eedword;
-	}
-	else {
-		MXpower.cfg.thadc3v2 = POWADC_3V2_VALUE;		// Default value
-		boardio.eeupdatebs |= (1 << eegren_powman);
-	}
+	else
+		MXpower.cfg.thadc3v2 = POWADC_3V2_VALUE;
+
 	//BOARD_ADC.EVCTRL |= ADC_SWEEP_01_gc;							// Sweep ADC channels 0 & 1
 	BOARD_ADC.EVCTRL = ADC_SWEEP_0_gc;								// Sweep ADC channel 0
 	BOARD_VDDIOCH.CTRL = ADC_CH_START_bm | ADC_CH_INPUTMODE0_bm;	// Start conversion on Channel 0, single-ended positive input signal
@@ -194,22 +201,14 @@ void powman_init(void) {
 }
 
 
-
-
-/*>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
- *>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
- *>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
- *>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+/*
  * Power management processor main function
  * [04/03/2015]
  * Output enable macro added to debug mode
  * [16/06/2015]
  * Heartbeat output pin created
  * [19/08/2015]
- *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
- *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
- *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
- *<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<*/
+ */
 uint8_t powman_mainproc(void) {
 	uint16_t	adcvalue;
 
@@ -250,11 +249,13 @@ uint8_t powman_mainproc(void) {
 			POWMANF_SET_MTIMER(POW_T1MSEC)			// Set heartbeat checking interval = 1msec
 			if (boardio.ctrlport->IN & MXpower.cfg.pinhbin) {	// Heartbeat pin must be high
 				MXpower.poscnt++;
-				if (MXpower.tmotcnt) MXpower.tmotcnt--;
+				if (MXpower.tmotcnt)
+					MXpower.tmotcnt--;
 			}
 			else {
 				MXpower.tmotcnt++;
-				if (MXpower.poscnt) MXpower.poscnt--;
+				if (MXpower.poscnt)
+					MXpower.poscnt--;
 			}
 
 
@@ -290,11 +291,13 @@ uint8_t powman_mainproc(void) {
 					!(adcvalue & 0x8000) &&					// ADC integer must be positive
 					(adcvalue > MXpower.cfg.thadc3v2)) {
 				MXpower.poscnt++;
-				if (MXpower.tmotcnt) MXpower.tmotcnt--;
+				if (MXpower.tmotcnt)
+					MXpower.tmotcnt--;
 			}
 			else {
 				MXpower.tmotcnt++;
-				if (MXpower.poscnt) MXpower.poscnt--;
+				if (MXpower.poscnt)
+					MXpower.poscnt--;
 			}
 
 
@@ -333,7 +336,8 @@ uint8_t powman_mainproc(void) {
 						(adcvalue > MXpower.cfg.thadc3v2)) {
 					POWMANF_SET_MTIMER(POW_T1SEC);				// VDDIO checking interval in idle state
 #ifndef DEBUG_NOIDLECNT
-					if (MXpower.idlecnt) MXpower.idlecnt--;
+					if (MXpower.idlecnt)
+						MXpower.idlecnt--;
 					if (MXpower.idlecnt)
 #endif	// DEBUG NOIDLECNT
 						return LE_OK;

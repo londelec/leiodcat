@@ -2,11 +2,18 @@
  ============================================================================
  Name        : leiodcat.c
  Author      : AK
- Version     : V2.00
+ Version     : V2.01
  Copyright   : Property of Londelec UK Ltd
  Description : LEIODC MCU main module
 
   Change log :
+
+  *********V2.01 01/06/2018**************
+  New hardware 0040 added
+  Analog inputs added
+  Station communication structure created
+  EEPROM include file removed
+  Timeout and t35 min value checks added
 
   *********V2.00 07/09/2016**************
   UART interface type added
@@ -46,7 +53,6 @@
 
 #include "board.h"
 #include "modbus.h"
-#include "modbussl.h"
 #include "powman.h"
 #include "timer.h"
 #include "usart.h"
@@ -56,40 +62,42 @@
 #ifdef EEPROM_CFG
 #include <avr/eeprom.h>
 #include "mcueecfg.h"
-#include "ateecfg.inc"
+//#include "ateecfg.inc"
 #endif
 
 
-#define	FWVERSION_MAJOR			1			// Firmware version number major
-#define	FWVERSION_MINOR			5			// Firmware version number minor
-#if FWVERSION_MINOR < 10
-#define	FWVERSION_10TH_ZERO		"0"
-#else
-#define	FWVERSION_10TH_ZERO		""
+#ifndef VERSION_MAJOR
+#error "VERSION_MAJOR must be defined"
 #endif
+#ifndef VERSION_MINOR
+#error "VERSION_MINOR must be defined"
+#endif
+
+
 const lechar FirmwareVersion[] PROGMEM = " FirmwareVersion="\
-								STRINGIFY(FWVERSION_MAJOR)\
-								"."\
-								FWVERSION_10TH_ZERO\
-								STRINGIFY(FWVERSION_MINOR)\
+								VERSION_STRING\
 								" ";
-#include "builddate.txt"
+#include "leiodcatdate.txt"
 
 
-//#define	HARDCODED_UART_SETTINGS				// Don't load UART setting from EEPROM
+#ifdef GLOBAL_DEBUG
+//#define HARDCODED_UART_SETTINGS				// Don't load UART setting from EEPROM
+//#define IGNORE_EE_CRC_ERROR						// Don't rebuild EEPROM configuration if there is a CRC error
+#endif	// GLOBAL_DEBUG
 
 
 // UART default settings
 #define DEFAULT_PARITY					'E'				// Default parity
-#define DEFAULT_TIMEOUT					50000			// UART Timeout (x100usec), default 5sec
+#define MODBUS_RXT35CONST				350000			// Modbus t35 (char) timeout conversion constant in 100usecs
+#define MIN_T35							10				// Minimal value of t35 (char) timer in 100usecs (1msec)
 
 
 // Board hardware type
-static const uint16_t FwRevNumber = (FWVERSION_MAJOR * 100) + FWVERSION_MINOR;
+static const uint16_t FwRevNumber = (VERSION_MAJOR * 100) + VERSION_MINOR;
 
 
 // Global variables
-mainlStr MainLeiodc = {
+mainl_t MainLeiodc = {
 		.chan = NULL,
 		.sta = NULL,
 		.gp = NULL,
@@ -104,8 +112,9 @@ static const lechar athw3100c[] PROGMEM = "3100";
 static const lechar athw2200c[] PROGMEM = "2200";
 static const lechar athw4000c[] PROGMEM = "4000";
 static const lechar athw0400c[] PROGMEM = "0400";
-static const struct hardwarenamestr__  {
-	athwenum				type;
+static const lechar athw0040c[] PROGMEM = "0040";
+static const struct hardwarename_s {
+	athw_e					type;
 	leptr					sptr;
 } hwnametable[] PROGMEM = {
 	{athwenmx3100v11,	 	(leptr) athw3100c},
@@ -113,6 +122,7 @@ static const struct hardwarenamestr__  {
 	{athwenat2200v10,	 	(leptr) athw2200c},
 	{athwenat4000v10,	 	(leptr) athw4000c},
 	{athwenat0400v10,	 	(leptr) athw0400c},
+	{athwenat0040v10,	 	(leptr) athw0040c},
 };
 
 
@@ -121,12 +131,12 @@ static const struct hardwarenamestr__  {
 //};
 
 
-typedef struct UARTBaudrateStr_ {
-	atbaudrateenum			brenum;
-	atbaudratedef 			baudrate;
-} UARTBaudrateStr;
+typedef struct baudratetab_s {
+	atbaudrate_e			brenum;
+	atbaud_t 				baudrate;
+} baudratetab_t;
 
-static const UARTBaudrateStr UARTBaudrateTable[] PROGMEM =
+static const baudratetab_t UARTBaudrateTable[] PROGMEM =
 {
 	{atbr300,				300},
 	{atbr600,				600},
@@ -143,81 +153,182 @@ static const UARTBaudrateStr UARTBaudrateTable[] PROGMEM =
 
 
 
-/***************************************************************************
-* Initialize channels
-* [19/02/2015]
-***************************************************************************/
-ChannelStr *channelinit(void) {
-	ChannelStr		*chanptr, *lastchan = MainLeiodc.chan;
+/*
+ * Calculate CRC16
+ * [27/10/2014]
+ */
+void calc_crc16(uint16_t *crc, const uint16_t poly, uint8_t databyte) {
+	uint8_t		i;
 
 
-	for (chanptr = MainLeiodc.chan; chanptr; chanptr = chanptr->next) {
-		if (chanptr->next)
-			lastchan = chanptr->next;
+	(*crc) ^= databyte;
+	for (i = 0; i < 8; i++) {
+		if ((*crc) & 1) {
+			(*crc) >>= 1;
+			(*crc) ^= poly;
+		}
+		else
+			(*crc) >>= 1;
 	}
-	chanptr = calloc(1, sizeof(ChannelStr));
+}
 
-	if (MainLeiodc.chan)
-		lastchan->next = chanptr;
-	else
-		MainLeiodc.chan = chanptr;
+
+/*
+ * Protocol receive process
+ * [20/02/2015]
+ * Rx function called directly
+ * [07/09/2016]
+ * Station communication structure created
+ * [03/07/2019]
+ */
+static void protocol_rxproc(void) {
+	station_t		*staptr;
+	//chret_e			chstate;
+
+
+	for (staptr = MainLeiodc.sta; staptr; staptr = staptr->next) {
+		if (rxfifo_check(&staptr->stacoms->chaninst->usart) == LE_OK) {
+			if (staptr->func_rx)
+				staptr->func_rx(staptr, NULL);
+			//	chstate = staptr->func_rx(staptr, NULL);
+			else
+				station_flush(staptr);
+			POWMAN_RSTIDLE		// Reset MX idle counter
+		}
+	}
+}
+
+
+/*
+ * Protocol main process
+ * [20/02/2015]
+ * Main processing function called directly
+ * [07/09/2016]
+ */
+static void protocol_mainproc(station_t *staptr) {
+	chret_e			chstate = chret_empty;
+	channel_t		*chanptr = staptr->stacoms->chaninst;
+
+
+	chanptr->txlen = 0;
+	if (staptr->func_mainproc)
+		chstate = staptr->func_mainproc(staptr);
+
+
+	switch (chstate) {
+	case chret_rxtx:
+		if (chanptr->txlen) {
+			chstate = channel_send(chanptr);
+		}
+		break;
+
+
+	default:
+		break;
+	}
+}
+
+
+/*
+ * Station main process
+ * [03/07/2019]
+ */
+static void station_main(void) {
+	station_t		*staptr;
+
+
+	for (staptr = MainLeiodc.sta; staptr; staptr = staptr->next) {
+		if ((!staptr->stacoms) || (!staptr->stacoms->chaninst))
+			continue;
+
+		protocol_mainproc(staptr);
+	}
+}
+
+
+/*
+ * Create new channel
+ * [03/07/2019]
+ */
+channel_t *channel_create(void) {
+	channel_t		*chanptr;
+
+
+	if ((chanptr = calloc(1, sizeof(*chanptr)))) {
+		if (!MainLeiodc.chan) 	// This is the first channel
+			MainLeiodc.chan = chanptr;
+		else {
+			channel_t *prevch;
+			for (prevch = MainLeiodc.chan; prevch->next; prevch = prevch->next) {}
+			prevch->next = chanptr;
+		}
+	}
 	return chanptr;
 }
 
 
-/***************************************************************************
-* Initialize stations
-* [19/02/2015]
-***************************************************************************/
-static StatStr *stationinit(void) {
-	StatStr			*staptr, *laststa = MainLeiodc.sta;
+/*
+ * Create new generic protocol
+ * [02/07/2019]
+ */
+genprot_t *genprot_create(station_t *staptr, size_t privsize, int addcont) {
+	genprot_t		*gprot;
+	size_t			memsize = sizeof(*gprot) + privsize;
 
 
-	for (staptr = MainLeiodc.sta; staptr; staptr = staptr->next) {
-		if (staptr->next)
-			laststa = staptr->next;
-	}
-	staptr = calloc(1, sizeof(StatStr));
-
-	if (MainLeiodc.sta)
-		laststa->next = staptr;
-	else
-		MainLeiodc.sta = staptr;
-	return staptr;
-}
+	if (!(gprot = calloc(1, memsize)))
+		return NULL;
 
 
-/***************************************************************************
-* Initialize generic protocols
-* [19/02/2015]
-***************************************************************************/
-static GenProtocolStr *genprotinit(void) {
-	GenProtocolStr		*gprot, *lastgp = MainLeiodc.gp;
-
-
-	for (gprot = MainLeiodc.gp; gprot; gprot = gprot->next) {
-		if (gprot->next)
-			lastgp = gprot->next;
-	}
-	gprot = calloc(1, sizeof(GenProtocolStr));
-
-	if (MainLeiodc.gp)
-		lastgp->next = gprot;
-	else
+	if (!MainLeiodc.gp) 	// This is the first Generic protocol
 		MainLeiodc.gp = gprot;
+	else {
+		genprot_t *prevgp;
+		for (prevgp = MainLeiodc.gp; prevgp->next; prevgp = prevgp->next) {}
+		prevgp->next = gprot;
+	}
+	gprot->statptr = staptr;
+
+	if (privsize)	// App layer doesn't exist if size is 0
+		gprot->applayer = (void *) (((leptr) gprot) + sizeof(*gprot));
+
 	return gprot;
 }
 
 
-/***************************************************************************
-* Convert between baudrate enum and decimal value or vice versa
-* [19/08/2015]
-* Program space memcpy function used
-* [10/09/2016]
-***************************************************************************/
-static uint8_t baudrateconv(uint8_t brenum, atbaudratedef *baudrate) {
+/*
+ * Create new station
+ * [03/07/2019]
+ */
+static station_t *station_create(void) {
+	station_t			*staptr;
+	stacom_t			*stacoms;
+
+
+	if ((staptr = calloc(1, sizeof(*staptr) + sizeof(*stacoms)))) {
+		if (!MainLeiodc.sta) 	// This is the first station
+			MainLeiodc.sta = staptr;
+		else {
+			station_t *prevst;
+			for (prevst = MainLeiodc.sta; prevst->next; prevst = prevst->next) {}
+			prevst->next = staptr;
+		}
+
+		staptr->stacoms = (void *) (((uint8_t *) staptr) + sizeof(*staptr));
+	}
+	return staptr;
+}
+
+
+/*
+ * Convert between baudrate enum and decimal value or vice versa
+ * [19/08/2015]
+ * Program space memcpy function used
+ * [10/09/2016]
+ */
+static uint8_t baudrateconv(uint8_t brenum, atbaud_t *baudrate) {
 	uint8_t			cnt;
-	UARTBaudrateStr	tabval;
+	baudratetab_t	tabval;
 
 
 	for (cnt = 0; cnt < (ARRAY_SIZE(UARTBaudrateTable)); cnt++) {
@@ -236,55 +347,46 @@ static uint8_t baudrateconv(uint8_t brenum, atbaudratedef *baudrate) {
 }
 
 
-/***************************************************************************
-* Initialize communication interfaces
-* [17/02/2015]
-* UART setting update functionality introduced
-* t35 timeout automatic calculation added
-* Default configuration flag created
-* [18/08/2015]
-* Additional control added to ensure t35 is always greater than 1msec
-* [24/08/2015]
-* UART interface type added
-* [08/09/2016]
-***************************************************************************/
+/*
+ * Initialize communication interfaces
+ * [17/02/2015]
+ * UART setting update functionality introduced
+ * t35 timeout automatic calculation added
+ * Default configuration flag created
+ * [18/08/2015]
+ * Additional control added to ensure t35 is always greater than 1msec
+ * [24/08/2015]
+ * UART interface type added
+ * [08/09/2016]
+ * Station communication structure created
+ * [04/07/2019]
+ * Timeout lower limit introduced
+ * [05/08/2020]
+ */
 static void comms_init(void) {
-	ChannelStr			*chanptr;
-	StatStr				*staptr;
-	GenProtocolStr		*gprot;
+	channel_t			*chanptr;
+	station_t			*staptr;
+	genprot_t			*gprot;
 	uint32_t			eedword;
-	atbaudratedef		baudrate = 0;
-	atparitydef			parity = DEFAULT_PARITY;
-	atbaudrateenum		defaultbr;
+	atbaud_t			baudrate = 0;
+	atparity_t			parity = DEFAULT_PARITY;
+	atbaudrate_e		defaultbr;
+	int					reqeeupd = 0;
 	uint8_t				devaddr = 1;
 	uint16_t			t35;
-	UartIntEnum			uartif = RS485;
-	uint8_t				reqeeupdate = 0;
+	uartint_e			uartif = RS485;
 
 
-	chanptr = channelinit();		// Initialize new channel
-	staptr = stationinit();			// Initialize new station
-	gprot = genprotinit();			// Initialize new generic protocol
-	staptr->channelinst = chanptr;	// Link station to channel
-	gprot->statptr = staptr;		// Link general protocol to station
-	chanptr->serialsta = staptr;	// Select serial station
+	chanptr = channel_create();
+	staptr = station_create();
+	staptr->stacoms->chaninst = chanptr;
+	chanptr->stacoms = staptr->stacoms;
 	boardio.uartee.parity = DEFAULT_PARITY;	// Default parity
-	*((atuarttodef *) &boardio.uartee.timeoutl) = DEFAULT_TIMEOUT;	// Default value 5sec
+	*((atuartto_t *) &boardio.uartee.timeoutl) = MIN_T35;	// Default value 1msec
 	boardio.uartee.t35 = 0;			// Undefined, default value will be used
 	boardio.uartee.devaddr = 1;		// Default address
 
 
-	/*switch (MainLeiodc.hw) {
-	case somerevision:
-		break;
-	case athwenat3100v11:
-		defaultbr = atbr9600;		// Default baudrate
-		break;
-	case athwenmx3100v11:
-	default:
-		defaultbr = atbr115200;		// Default baudrate
-		break;
-	}*/
 	if (MainLeiodc.hw & ATHWF_MXBOARD)
 		defaultbr = atbr115200;		// Default baudrate
 	else
@@ -292,167 +394,109 @@ static void comms_init(void) {
 	boardio.uartee.bren16 = defaultbr;
 
 
-#ifdef HARDCODED_UART_SETTINGS
-	boardio.eerdmask |= (1 << eegren_uart0);
-#endif
-
-
-	if (eeconf_get(eegren_uart0, eedten_uart_baudrate, &eedword, &reqeeupdate) == LE_OK) {
+#ifndef HARDCODED_UART_SETTINGS
+	if (eeconf_get(eegren_uart0, eedten_uart_baudrate, &eedword) == LE_OK) {
 		if (baudrateconv(eedword, &baudrate) == LE_OK)
 			boardio.uartee.bren16 = eedword;
 		else
-			reqeeupdate = 1;
+			reqeeupd = 1;
 	}
 
-	if (eeconf_get(eegren_uart0, eedten_uart_parity, &eedword, &reqeeupdate) == LE_OK) {
+	if (eeconf_get(eegren_uart0, eedten_uart_parity, &eedword) == LE_OK) {
 		if (uartsettvalidate(atmapen_parity, eedword) == LE_OK)
 			boardio.uartee.parity = eedword;
 		else
-			reqeeupdate = 1;
+			reqeeupd = 1;
 	}
 
-	if (eeconf_get(eegren_uart0, eedten_uart_txdelay, &eedword, &reqeeupdate) == LE_OK)
-		*((atuarttodef *) &boardio.uartee.txdelayl) = eedword;
+	if (eeconf_get(eegren_uart0, eedten_uart_txdelay, &eedword) == LE_OK)
+		*((atuartto_t *) &boardio.uartee.txdelayl) = eedword;
 
-	if (eeconf_get(eegren_uart0, eedten_uart_timeout, &eedword, &reqeeupdate) == LE_OK)
-		*((atuarttodef *) &boardio.uartee.timeoutl) = eedword;
+	if (eeconf_get(eegren_uart0, eedten_uart_timeout, &eedword) == LE_OK)
+		*((atuartto_t *) &boardio.uartee.timeoutl) = eedword;
 
-	if (eeconf_get(eegren_uart0, eedten_uart_t35, &eedword, &reqeeupdate) == LE_OK) {
+	if (eeconf_get(eegren_uart0, eedten_uart_t35, &eedword) == LE_OK)
 		boardio.uartee.t35 = eedword;
-	}
 
-	if (eeconf_get(eegren_uart0, eedten_uart_address, &eedword, &reqeeupdate) == LE_OK) {
+
+	if (eeconf_get(eegren_uart0, eedten_uart_address, &eedword) == LE_OK) {
 		if (uartsettvalidate(atmapen_devaddr, eedword) == LE_OK)
 			boardio.uartee.devaddr = eedword;
 		else
-			reqeeupdate = 1;
+			reqeeupd = 1;
 	}
 
-	if (eeconf_get(eegren_uart0, eedten_uart_iface, &eedword, &reqeeupdate) == LE_OK) {
+	if (eeconf_get(eegren_uart0, eedten_uart_iface, &eedword) == LE_OK)
 		boardio.uartee.uartif = eedword;
-	}
+#endif
 
 
-	if ((!baudrate) || (boardio.rflags & BOARDRF_DEFCONF)) {
+	if ((!baudrate) || (boardio.rflags & BOARDRF_DEFCONF))
 		baudrateconv(defaultbr, &baudrate);	// Set default baudrate
-	}
 
 
 	if (boardio.rflags & BOARDRF_DEFCONF) {
-		chanptr->chtimeout = DEFAULT_TIMEOUT;
+		// We are not checking or adjusting EEPROM values if DEFCONF switch is activated
+		// just making sure actual t35 and timeout values are not to small
 		chanptr->chtxdelay = 0;
 		t35 = (MODBUS_RXT35CONST / baudrate);
-		if (boardio.uartee.t35 < 10) {	// Ensure t35 is at least 1msec
-			boardio.uartee.t35 = 10;
-		}
+		if (t35 < MIN_T35) 					// Ensure actual t35 is at least 1msec
+			t35 = MIN_T35;
+		//if (boardio.uartee.t35 < MIN_T35) 	// Ensure EE saved t35 is at least 1msec
+		//	boardio.uartee.t35 = MIN_T35;
+		if (chanptr->chtimeout < t35) 		// Ensure actual timeout is at least t35
+			chanptr->chtimeout = t35;
 	}
 	else {
-		if (boardio.uartee.t35 < 10) {	// Ensure t35 is at least 1msec
-			boardio.uartee.t35 = 10;
-			reqeeupdate = 1;
+		if (boardio.uartee.t35 < MIN_T35) {	// Ensure t35 is at least 1msec
+			boardio.uartee.t35 = MIN_T35;
+			reqeeupd = 1;
 		}
 		if (boardio.uartee.t35 < (MODBUS_RXT35CONST / baudrate)) {	// Ensure t35 is at least 35 bits long
 			boardio.uartee.t35 = (MODBUS_RXT35CONST / baudrate);
-			reqeeupdate = 1;
+			reqeeupd = 1;
 		}
 		t35 = boardio.uartee.t35;
+
+		memcpy(&chanptr->chtimeout, &boardio.uartee.timeoutl, sizeof(atuartto_t));
+		if (chanptr->chtimeout < t35) {		// Ensure timeout is at least t35
+			chanptr->chtimeout = t35;
+			boardio.uartee.timeoutl = t35;
+			boardio.uartee.timeouth = 0;
+			reqeeupd = 1;
+		}
+
 		parity = boardio.uartee.parity;
-		memcpy(&chanptr->chtimeout, &boardio.uartee.timeoutl, sizeof(atuarttodef));
-		memcpy(&chanptr->chtxdelay, &boardio.uartee.txdelayl, sizeof(atuarttodef));
+		memcpy(&chanptr->chtxdelay, &boardio.uartee.txdelayl, sizeof(atuartto_t));
 		devaddr = boardio.uartee.devaddr;
 		uartif = boardio.uartee.uartif;
 	}
 
 
-	if (reqeeupdate)	// EEPROM update required
-		boardio.eeupdatebs |= (1 << eegren_uart0);
+	if (reqeeupd)
+		boardio.eesize = 0;
 
 
 	usart_init(&chanptr->usart, baudrate, parity, uartif);	// Initialize UART
-	Modbussl_preinit(gprot, devaddr);
-	Modbussl_postinit(gprot, t35, boardio.mapsize);
+	gprot = Modbussl_create(staptr, chanptr);
+	Modbussl_postinit(gprot, boardio.mapsize);
+	staptr->address = devaddr;
+	((Modbus_shlink_t *) staptr->stacoms->priv)->rxtimeout35 = t35;
+	((Modbus_shlink_t *) staptr->stacoms->priv)->fformat = ModbusRTU;
 }
 
 
-/***************************************************************************
-* Protocol receive process
-* [20/02/2015]
-* Rx function called directly
-* [07/09/2016]
-***************************************************************************/
-static void protocolrxproc(void) {
-	ChannelStr			*chanptr;
-	CHStateEnum			chstate = CHCommsEmpty;		// Return state of functions
-
-
-	for (chanptr = MainLeiodc.chan; chanptr; chanptr = chanptr->next) {
-		if (checkrx(&chanptr->usart) == LE_OK) {
-			if (chanptr->serialsta->func_rx) {
-				chstate = chanptr->serialsta->func_rx(chanptr->serialsta);
-			}
-			//else flushrx(chanptr);
-			POWMAN_RSTIDLE		// Reset MX idle counter
-		}
-	}
-}
-
-
-/***************************************************************************
-* Protocol main process
-* [20/02/2015]
-* Main processing function called directly
-* [07/09/2016]
-***************************************************************************/
-static void protocolmainproc(void) {
-	StatStr				*staptr;
-	uint8_t				*txbuffer;			// Buffer pointer will be initialized by outgoing message prepare functions
-	TxRx16bitDef		txlength = 0;
-	CHStateEnum			chstate = CHCommsEmpty;			// Return state of functions
-
-
-	for (staptr = MainLeiodc.sta; staptr; staptr = staptr->next) {
-		if (staptr->func_mainproc) {		// New main processing concept
-			chstate = staptr->func_mainproc(staptr, &txbuffer, &txlength);
-		}
-
-
-		// Analyze the state process function has returned
-		switch (chstate) {
-		case CHCommsRxTx:		// Send message
-			if (txlength) {
-				chstate = channeltx(staptr,	txbuffer, txlength);
-			}
-			break;
-
-
-		//case CHCommsDataError:	// Error during main process
-		//	Channel_reqclose(staptr, CHCloseDataErr);
-		//	break;
-
-
-		//case CHCommsDisabled:	// Station Disabled by service
-		//	Channel_reqclose(staptr, CHCloseDisabled);
-		//	break;
-
-
-		default:
-			break;
-		}
-	}
-}
-
-
-/***************************************************************************
-* Get name of the current hardware
-* [24/02/2015]
-* Table moved to program space
-* [15/06/2015]
-* MX board flag created
-* [10/09/2016]
-***************************************************************************/
+/*
+ * Get name of the current hardware
+ * [24/02/2015]
+ * Table moved to program space
+ * [15/06/2015]
+ * MX board flag created
+ * [10/09/2016]
+ */
 uint8_t gethwname(lechar *namebuf) {
 	uint8_t					length, tabcnt;
-	athwenum				hwtype;
+	athw_e					hwtype;
 	leptr					lpmptr = (leptr) athwundefinedc;
 
 
@@ -480,15 +524,17 @@ uint8_t gethwname(lechar *namebuf) {
 }
 
 
-/***************************************************************************
-* Initialize protocol mapping
-* [28/02/2015]
-* UART settings mapped
-* [18/08/2015]
-* UART interface type added
-* [08/09/2016]
-***************************************************************************/
-uint8_t mappinginit(ModReg16bitDef reg, leptr *rdptr, leptr *wrptr) {
+/*
+ * Initialize protocol mapping
+ * [28/02/2015]
+ * UART settings mapped
+ * [18/08/2015]
+ * UART interface type added
+ * [08/09/2016]
+ * Analog inputs added
+ * [03/06/2018]
+ */
+uint8_t mappinginit(Modreg16_t reg, leptr *rdptr, leptr *wrptr) {
 
 
 	switch (reg) {
@@ -551,6 +597,39 @@ uint8_t mappinginit(ModReg16bitDef reg, leptr *rdptr, leptr *wrptr) {
 		if (boardio.diptr) {
 			if ((reg - atmapen_dif00) < boardio.diptr->count) {
 				*rdptr = (leptr) &boardio.diptr->filterconst[reg - atmapen_dif00];
+				*wrptr = *rdptr;
+				return LE_OK;
+			}
+		}
+		break;
+
+	case atmapen_airegi00:
+	case atmapen_airegi01:
+	case atmapen_airegi02:
+	case atmapen_airegi03:
+	case atmapen_airegi04:
+	case atmapen_airegi05:
+	case atmapen_airegi06:
+	case atmapen_airegi07:
+		if (boardio.aiptr) {
+			if ((reg - atmapen_airegi00) < boardio.aiptr->count) {
+				*rdptr = (leptr) &boardio.aiptr->uval[reg - atmapen_airegi00];
+				return LE_OK;
+			}
+		}
+		break;
+
+	case atmapen_aimode00:
+	case atmapen_aimode01:
+	case atmapen_aimode02:
+	case atmapen_aimode03:
+	case atmapen_aimode04:
+	case atmapen_aimode05:
+	case atmapen_aimode06:
+	case atmapen_aimode07:
+		if (boardio.aiptr) {
+			if ((reg - atmapen_aimode00) < boardio.aiptr->count) {
+				*rdptr = (leptr) &boardio.aiptr->mode[reg - atmapen_aimode00];
 				*wrptr = *rdptr;
 				return LE_OK;
 			}
@@ -698,7 +777,7 @@ uint8_t mappinginit(ModReg16bitDef reg, leptr *rdptr, leptr *wrptr) {
 * [04/03/2015]
 ***************************************************************************/
 void outputpinctrl(uint8_t disable) {
-	ChannelStr		*chanptr;
+	channel_t		*chanptr;
 
 
 	for (chanptr = MainLeiodc.chan; chanptr; chanptr = chanptr->next) {
@@ -729,14 +808,15 @@ void outputpinctrl(uint8_t disable) {
 }*/
 
 
-
-/***************************************************************************
-* Validate UART setting
-* [19/08/2015]
-* UART interface type added
-* [10/09/2016]
-***************************************************************************/
-uint8_t uartsettvalidate(atmappingenum mapreg, ModData16bitDef val) {
+/*
+ * Validate UART setting
+ * [19/08/2015]
+ * UART interface type added
+ * [10/09/2016]
+ * Timeout and t35 min value checks added
+ * [05/08/2020]
+ */
+int uartsettvalidate(atmapping_e mapreg, Modreg16_t val) {
 
 	switch (mapreg) {
 	case atmapen_baudrate:
@@ -764,6 +844,12 @@ uint8_t uartsettvalidate(atmappingenum mapreg, ModData16bitDef val) {
 			goto failed;	// Tx delay must be less than 0x3FFFF (13.1071sec)
 		break;
 
+	case atmapen_t35:
+	case atmapen_timeoutl:
+		if (!val)
+			goto failed;	// Timeouts must be > 0
+		break;
+
 	case atmapen_devaddr:
 		if ((val < 1) || (val > 254))
 			goto failed;
@@ -788,7 +874,7 @@ uint8_t uartsettvalidate(atmappingenum mapreg, ModData16bitDef val) {
 * Validate data before updating EEPROM configuration
 * [18/08/2015]
 ***************************************************************************/
-/*uint8_t updatecfg_validate(atmappingenum mapreg, ModData16bitDef val) {
+/*uint8_t updatecfg_validate(atmapping_e mapreg, ModData16bitDef val) {
 	uint8_t			cnt;
 	ModReg16bitDef	tabreg;
 	ModData16bitDef	lowlimit, highlimit;
@@ -813,8 +899,8 @@ uint8_t uartsettvalidate(atmappingenum mapreg, ModData16bitDef val) {
 * Validate received write register value
 * [10/09/2016]
 ***************************************************************************/
-uint8_t writevalidate(atmappingenum mapreg, ModData16bitDef val, uint8_t *eeupd) {
-	mcueegrpenum	groupid;
+uint8_t writevalidate(atmapping_e mapreg, Modreg16_t val, uint8_t *eeupd) {
+	mcueegrp_e		groupid;
 	uint8_t			valid;
 
 
@@ -854,27 +940,39 @@ uint8_t writevalidate(atmappingenum mapreg, ModData16bitDef val, uint8_t *eeupd)
 }
 
 
-/***************************************************************************
-* Main function
-* [24/02/2015]
-* LED driver main process moved to board.c
-* [24/08/2015]
-***************************************************************************/
+/*
+ * Main function
+ * [24/02/2015]
+ * LED driver main process moved to board.c
+ * [24/08/2015]
+ */
 int main(void) {
-
 
 	board_init();
 	timer_init();
 	powman_init();
 	comms_init();
 
-	if (boardio.eeupdatebs)
-		eeconf_restructure();
+
+	if (!boardio.eesize) {
+			boardio.eeupdatebs |=
+				(1 << eegren_board) |
+				(1 << eegren_powman) |
+				(1 << eegren_uart0);
+
+#ifdef IGNORE_EE_CRC_ERROR
+		if (!(boardio.rflags & BOARDRF_EECONF_CORRUPTED))
+#endif
+			eeconf_rebuild();
+	}
+	else {
+		 eeconf_copy(1);
+	}
 
 
 #ifdef GLOBAL_DEBUG
 	//uint8_t debugint = 0;
-	//boardio.caltemp85 = sizeof(atbaudrateenum);
+	//boardio.caltemp85 = sizeof(atbaudrate_e);
 #endif
 
 
@@ -882,8 +980,8 @@ int main(void) {
 		//wdt_reset();
 		if (powman_mainproc() == LE_OK) {		// Power manager processor, main function
 			board_mainproc();
-			protocolrxproc();
-			protocolmainproc();
+			protocol_rxproc();
+			station_main();
 #ifdef GLOBAL_DEBUG
 			/*if (!debugint) {
 				debugint = 1;
