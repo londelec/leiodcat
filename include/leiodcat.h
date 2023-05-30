@@ -44,7 +44,7 @@
 
 // Version numbers and constants
 #define VERSION_MAJOR			1			// Firmware version number major
-#define VERSION_MINOR			6			// Firmware version number minor
+#define VERSION_MINOR			7			// Firmware version number minor
 #if VERSION_MINOR < 10
 #define FWVERSION_10TH_ZERO		"0"
 #else
@@ -307,7 +307,7 @@ typedef struct stacom_s {
 typedef struct station_s {
 	struct station_s		*next;						// Next Station pointer
 	stacom_t				*stacoms;					// Station communication structure stared between stations of the same UART or socket
-	void					*protocolp;					// Protocol pointer
+	struct genprot_s		*gpinst;					// Generic protocol pointer for protocols that don't need GP container
 	chret_e					(*func_mainproc)(STAARG_MAINPROC);	// Main processing function
 	chret_e					(*func_rx)(STAARG_RX);		// Generic receive function
 	staddr_t				address;					// Serial station address e.g. link address

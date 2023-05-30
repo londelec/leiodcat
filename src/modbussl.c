@@ -47,6 +47,7 @@
 
 
 #ifdef GLOBAL_DEBUG
+#define DEBUG_INIT_REGMEM				// Initialize register memory
 #endif	// GLOBAL_DEBUG
 
 
@@ -266,6 +267,10 @@ static txrx8_t Modbussl_appprocess(Modbussl_layer *applayer, uint8_t *rxtxbuff) 
 					}
 				}
 #endif
+
+#ifdef DEBUG_INIT_REGMEM
+				*applayer->regmem[memoffset].wrdata = rcvddata;
+#endif
 				return (4);			// Echo the received message
 			}
 		}
@@ -409,7 +414,8 @@ static void servcb_disable(SERVARG_DOCB) {
 static chret_e Modbussl_process(STAARG_MAINPROC) {
 	stacom_t			*stacoms = staptr->stacoms;
 	channel_t			*chanptr = stacoms->chaninst;
-	Modbussl_layer		*applayer = staptr->protocolp;
+	genprot_t			*gprot = staptr->gpinst;
+	Modbussl_layer		*applayer = gprot->applayer;
 	Modbus_shlink_t		*sharedlink = stacoms->priv;
 	chret_e				chstate = chret_empty;
 	txrx8_t	 			datalength;
@@ -457,7 +463,7 @@ static chret_e Modbussl_process(STAARG_MAINPROC) {
 
 #if (MODBUSSL_TYPE == MODBUS_GENERIC)
 				staptr = STATION_SERIAL_SEL(stacoms);	// New station may have been selected
-				applayer = staptr->protocolp;
+				applayer = staptr->gpinst->applayer;
 #endif
 
 				switch (chstate) {
@@ -534,6 +540,77 @@ static chret_e Modbussl_process(STAARG_MAINPROC) {
 
 
 /*
+ * Dummy Modbus register memory for testing
+ * [12/12/2020]
+ */
+#ifdef DEBUG_INIT_REGMEM
+static void dummy_regmem(Modbussl_layer *applayer) {
+	Modreg16_t		i;
+	Modreg16_t		*buf;
+
+
+	applayer->regcount = 11;
+	applayer->regmem = calloc(applayer->regcount, sizeof(*applayer->regmem));
+	buf = calloc(applayer->regcount, sizeof(Modreg16_t));
+
+
+	for (i = 0; i < applayer->regcount; i++) {
+		switch (i) {
+		case 0:
+			//applayer->regmem[i].reg = 0x0001;
+			applayer->regmem[i].reg = 40493;
+			break;
+
+		case 1:
+			applayer->regmem[i].reg = 0x0100;
+			//buf[i] = 0x023A;
+			break;
+
+		case 2:
+		case 4:
+			buf[i] = 0x0;
+			//applayer->regmem[i].reg = 0x0110 + i - 2;
+			applayer->regmem[i].reg = 31249 + i - 2;
+			break;
+
+		case 3:
+		case 5:
+			buf[i] = 116;
+			//applayer->regmem[i].reg = 0x0110;
+			//applayer->regmem[i].reg = 0x0110 + i - 2;
+			applayer->regmem[i].reg = 31249 + i - 2;
+
+			break;
+
+		case 6:
+			applayer->regmem[i].reg = 0x0300;
+			break;
+
+		case 7:
+			buf[i] = 0xFFFF;
+			applayer->regmem[i].reg = 0x0320 + i - 7;
+			break;
+
+		case 8:
+			buf[i] = 0xFFFD;
+			/* fallthrough */
+		case 9:
+		case 10:
+			//applayer->regmem[i].reg = 0x0320 + i - 7;
+			applayer->regmem[i].reg = 41167 + i - 9;
+			break;
+
+		default:
+			break;
+		}
+		applayer->regmem[i].rddata = (Modreg8_t *) &buf[i];
+		applayer->regmem[i].wrdata = &buf[i];
+	}
+}
+#endif
+
+
+/*
  * Initialize Modbus Slave register memory
  * [28/02/2015]
  * Generalized for leandc
@@ -592,7 +669,7 @@ genprot_t *Modbussl_create(station_t *staptr, channel_t *chanptr) {
 
 
 	layer = gprot->applayer;
-	staptr->protocolp = layer;
+	staptr->gpinst = gprot;
 	staptr->func_rx = Modbus_receive;
 	staptr->func_mainproc = Modbussl_process;
 
@@ -622,5 +699,11 @@ void Modbussl_postinit(genprot_t *gprot, uint8_t mapsize) {
 
 
 	Modbus_postinit(gprot->statptr);
+
+#ifdef DEBUG_INIT_REGMEM
+	dummy_regmem(applayer);
+	return;
+#endif
+
 	Modbussl_regmeminit(applayer, mapsize);
 }

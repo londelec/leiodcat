@@ -62,7 +62,6 @@ typedef struct Modbussl_layer_s {
 	//Modbusma_CTprivate		*CTtable;					// CT object Table
 	//Modbusma_DOprivate		*DOtable;					// DO private table
 	//Modbusma_AOprivate		*AOtable;					// AO private table
-	//logfile_t				*eventlog;					// Event Logfile structure pointer
 	//ModbusEvLogVars			evlogvar;					// Event Logger variables
 	//ModbusmastateEnum		devstate;					// Device operation state
 	Modreg16_t				eemapbase;					// EEPROM data mapping base register

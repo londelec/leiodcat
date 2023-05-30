@@ -115,8 +115,8 @@ static const lechar clogrxlenincorrect[] = "Received message length (%u) is inco
 			commslogger(txptr, chanptr->txlen, NULL, staptr->logfile, clogenTX);\
 		stacom_clog(stacoms, CLOGXF_OUTGOING, txptr, chanptr->txlen, clogenTX);
 
-#define COMMS_RXERRLOG(...) station_rxclog(staptr, CLOGXF_STATUSINFO, (sharedlink->fformat == ModbusTCP) ? (sharedlink->rxbuff) : (sharedlink->rxbuff + MODBUS_TCPHEADER_SIZE), sharedlink->rxbytecnt, clogenERR, __func__, __FILE__, __LINE__, __VA_ARGS__);
-#define COMMS_TCPERRLOG(mlen, ...) station_rxclog(staptr, CLOGXF_STATUSINFO, sharedlink->rxbuff, mlen, clogenERR, __func__, __FILE__, __LINE__, __VA_ARGS__);
+#define COMMS_RXERRLOG(...) station_rxclog(staptr, CLOGXF_ERROR, (sharedlink->fformat == ModbusTCP) ? (sharedlink->rxbuff) : (sharedlink->rxbuff + MODBUS_TCPHEADER_SIZE), sharedlink->rxbytecnt, clogenERR, __func__, __FILE__, __LINE__, __VA_ARGS__);
+#define COMMS_TCPERRLOG(mlen, ...) station_rxclog(staptr, CLOGXF_ERROR, sharedlink->rxbuff, mlen, clogenERR, __func__, __FILE__, __LINE__, __VA_ARGS__);
 #else
 #define COMMS_RXLOG(mlength, moffs)
 #define COMMS_RXHWLOG(mlength, moffs)
